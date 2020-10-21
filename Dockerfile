@@ -5,17 +5,19 @@ RUN apt-get -y install \
     clang \
     curl \
     git \
+    vim \
     python3 \
     python3-dev \
     python3-pip \
     python3-setuptools \
     python3-wheel \
-    sudo
+    sudo && apt update
 RUN mkdir repo
 WORKDIR /repo
 
 RUN sudo pip3 install --upgrade pip
 RUN sudo pip3 install matplotlib
+RUN sudo pip3 install jupyterlab
 
 # install
 COPY . .
@@ -29,10 +31,10 @@ RUN pip3 install --upgrade cmake
 RUN mkdir -p build
 WORKDIR /repo/build
 RUN cmake -DPython3_EXECUTABLE=`which python3` -DCMAKE_CXX_COMPILER=`which clang++` ../open_spiel
-RUN make -j12
+RUN make -j4
 ENV PYTHONPATH=${PYTHONPATH}:/repo
 ENV PYTHONPATH=${PYTHONPATH}:/repo/build/python
-RUN ctest -j12
+RUN ctest -j4
 WORKDIR /repo/open_spiel
 
 # minimal image for development in Python
@@ -42,6 +44,7 @@ WORKDIR /repo
 COPY --from=base /repo .
 RUN pip3 install --upgrade -r requirements.txt
 RUN pip3 install matplotlib
+RUN sudo pip3 install jupyterlab
 ENV PYTHONPATH=${PYTHONPATH}:/repo
 ENV PYTHONPATH=${PYTHONPATH}:/repo/build/python
 WORKDIR /repo/open_spiel
