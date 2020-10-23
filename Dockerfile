@@ -11,6 +11,11 @@ RUN apt-get -y install \
     python3-pip \
     python3-setuptools \
     python3-wheel \
+    gobject-introspection \
+    gir1.2-gtk-3.0 \
+    python3-gi-cairo \
+    graphviz \
+    graphviz-dev \
     sudo && apt update
 RUN mkdir repo
 WORKDIR /repo
@@ -18,6 +23,8 @@ WORKDIR /repo
 RUN sudo pip3 install --upgrade pip
 RUN sudo pip3 install matplotlib
 RUN sudo pip3 install jupyterlab
+RUN sudo pip3 install torch
+RUN sudo pip3 install --install-option="--include-path=/usr/share/graphviz"  --install-option="--library-path=/usr/share/graphviz" pygraphviz
 
 # install
 COPY . .
