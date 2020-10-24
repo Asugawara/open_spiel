@@ -6,6 +6,7 @@ RUN apt-get -y install \
     curl \
     git \
     vim \
+    screen \
     python3 \
     python3-dev \
     python3-pip \
@@ -24,6 +25,7 @@ RUN sudo pip3 install --upgrade pip
 RUN sudo pip3 install matplotlib
 RUN sudo pip3 install jupyterlab
 RUN sudo pip3 install torch
+RUN sudo pip3 install hypothesis
 RUN sudo pip3 install --install-option="--include-path=/usr/share/graphviz"  --install-option="--library-path=/usr/share/graphviz" pygraphviz
 
 # install
