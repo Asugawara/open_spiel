@@ -462,7 +462,8 @@ def sequence_weights_to_tabular_profile(root, policy_fn):
 def feedforward_evaluate(layers,
                          x,
                          use_skip_connections=False,
-                         hidden_are_factored=False):
+                         hidden_are_factored=False,
+                         hidden_activation=nn.ReLU):
   """Evaluates `layers` as a feedforward neural network on `x`.
 
   Args:
@@ -486,6 +487,10 @@ def feedforward_evaluate(layers,
   x = tensor_to_matrix(x)
   i = 0
   while i < len(layers) - 1:
+    if isinstance(layers[i], hidden_activation):
+      x = layers[i](x)
+      i += 1
+      continue
     y = layers[i](x)
     i += 1
     if hidden_are_factored:
@@ -519,7 +524,7 @@ class DeepRcfrModel(nn.Module):
                num_hidden_units,
                num_hidden_layers=1,
                num_hidden_factors=0,
-               hidden_activation=nn.ReLU(),
+               hidden_activation=nn.ReLU,
                use_skip_connections=False,
                regularizer=None):
     """Creates a new `DeepRcfrModel.
@@ -546,6 +551,7 @@ class DeepRcfrModel(nn.Module):
     super(DeepRcfrModel, self).__init__()
     self._use_skip_connections = use_skip_connections
     self._hidden_are_factored = num_hidden_factors > 0
+    self._hidden_activation = hidden_activation
 
     self.layers = []
     for _ in range(num_hidden_layers):
@@ -561,10 +567,10 @@ class DeepRcfrModel(nn.Module):
           num_hidden_factors,
           num_hidden_units,
           bias=True))
-      #if hidden_activation:
-      #  self.layers.append(
-      #    hidden_activation)
-    print(self.layers)
+      if hidden_activation:
+        self.layers.append(
+          hidden_activation())
+    
 
     self.layers.append(
       nn.Linear(num_hidden_units, 1, bias=True))
@@ -585,4 +591,253 @@ class DeepRcfrModel(nn.Module):
         layers=self.layers,
         x=x,
         use_skip_connections=self._use_skip_connections,
-        hidden_are_factored=self._hidden_are_factored)
+        hidden_are_factored=self._hidden_are_factored,
+        hidden_activation=self._hidden_activation)
+  
+  
+class _RcfrSolver(object):
+  """An abstract RCFR solver class.
+
+  Requires that subclasses implement `evaluate_and_update_policy`.
+  """
+
+  def __init__(self, game, models, truncate_negative=False):
+    """Creates a new `_RcfrSolver`.
+
+    Args:
+      game: An OpenSpiel `Game`.
+      models: Current policy models (optimizable array-like -> `tf.Tensor`
+        callables) for both players.
+      truncate_negative: Whether or not to truncate negative (approximate)
+        cumulative regrets to zero to implement RCFR+. Defaults to `False`.
+      session: A TensorFlow `Session` to convert sequence weights from
+        `tf.Tensor`s produced by `models` to `np.array`s. If `None`, it is
+        assumed that eager mode is enabled. Defaults to `None`.
+    """
+    self._game = game
+    self._models = models
+    self._truncate_negative = truncate_negative
+    self._root_wrapper = RootStateWrapper(game.new_initial_state())
+
+    self._cumulative_seq_probs = [
+        np.zeros(n) for n in self._root_wrapper.num_player_sequences
+    ]
+
+  def _sequence_weights(self, player=None):
+    """Returns regret-like weights for each sequence as an `np.array`.
+
+    Negative weights are truncated to zero.
+
+    Args:
+      player: The player to compute weights for, or both if `player` is `None`.
+        Defaults to `None`.
+    """
+    if player is None:
+      return [
+          self._sequence_weights(player)
+          for player in range(self._game.num_players())
+      ]
+    else:
+      tensor = F.relu(
+          torch.squeeze(self._models[player](
+              self._root_wrapper.sequence_features[player])))
+      return tensor.detach().numpy()
+
+  def evaluate_and_update_policy(self, train_fn):
+    """Performs a single step of policy evaluation and policy improvement.
+
+    Args:
+      train_fn: A (model, `tf.data.Dataset`) function that trains the given
+        regression model to accurately reproduce the x to y mapping given x-y
+        data.
+
+    Raises:
+      NotImplementedError: If not overridden by child class.
+    """
+    raise NotImplementedError()
+
+  def current_policy(self):
+    """Returns the current policy profile.
+
+    Returns:
+      A `dict<info state, list<Action, probability>>` that maps info state
+      strings to `Action`-probability pairs describing each player's policy.
+    """
+    return self._root_wrapper.sequence_weights_to_tabular_profile(
+        self._sequence_weights())
+
+  def average_policy(self):
+    """Returns the average of all policies iterated.
+
+    This average policy converges toward a Nash policy as the number of
+    iterations increases as long as the regret prediction error decreases
+    continually [Morrill, 2016].
+
+    The policy is computed using the accumulated policy probabilities computed
+    using `evaluate_and_update_policy`.
+
+    Returns:
+      A `dict<info state, list<Action, probability>>` that maps info state
+      strings to (Action, probability) pairs describing each player's policy.
+    """
+    return self._root_wrapper.sequence_weights_to_tabular_profile(
+        self._cumulative_seq_probs)
+
+  def _previous_player(self, player):
+    """The previous player in the turn ordering."""
+    return player - 1 if player > 0 else self._game.num_players() - 1
+
+  def _average_policy_update_player(self, regret_player):
+    """The player for whom the average policy should be updated."""
+    return self._previous_player(regret_player)
+
+
+class RcfrSolver(_RcfrSolver):
+  """RCFR with an effectively infinite regret data buffer.
+
+  Exact or bootstrapped cumulative regrets are stored as if an infinitely
+  large data buffer. The average strategy is updated and stored in a full
+  game-size table. Reproduces the RCFR versions used in experiments by
+  Waugh et al. [2015] and Morrill [2016] except that this class does not
+  restrict the user to regression tree models.
+  """
+
+  def __init__(self,
+               game,
+               models,
+               bootstrap=None,
+               truncate_negative=False):
+    self._bootstrap = bootstrap
+    super(RcfrSolver, self).__init__(
+        game, models, truncate_negative=truncate_negative)
+
+    self._regret_targets = [
+        np.zeros(n) for n in self._root_wrapper.num_player_sequences
+    ]
+
+  def evaluate_and_update_policy(self, train_fn):
+    """Performs a single step of policy evaluation and policy improvement.
+
+    Args:
+      train_fn: A (model, `tf.data.Dataset`) function that trains the given
+        regression model to accurately reproduce the x to y mapping given x-y
+        data.
+    """
+    sequence_weights = self._sequence_weights()
+    player_seq_features = self._root_wrapper.sequence_features
+    for regret_player in range(self._game.num_players()):
+      seq_prob_player = self._average_policy_update_player(regret_player)
+
+      regrets, seq_probs = (
+          self._root_wrapper.counterfactual_regrets_and_reach_weights(
+              regret_player, seq_prob_player, *sequence_weights))
+
+      if self._bootstrap:
+        self._regret_targets[regret_player][:] = sequence_weights[regret_player]
+      if self._truncate_negative:
+        regrets = np.maximum(-relu(self._regret_targets[regret_player]),
+                             regrets)
+
+      self._regret_targets[regret_player] += regrets
+      self._cumulative_seq_probs[seq_prob_player] += seq_probs
+
+      targets = torch.unsqueeze(torch.Tensor(self._regret_targets[regret_player]), axis=1)
+      data = torch.utils.data.TensorDataset(
+          player_seq_features[regret_player], targets)
+
+      regret_player_model = self._models[regret_player]
+      train_fn(regret_player_model, data)
+      sequence_weights[regret_player] = self._sequence_weights(regret_player)
+
+      
+class ReservoirBuffer(object):
+  """A generic reservoir buffer data structure.
+
+  After every insertion, its contents represents a `size`-size uniform
+  random sample from the stream of candidates that have been encountered.
+  """
+
+  def __init__(self, size):
+    self.size = size
+    self.num_elements = 0
+    self._buffer = np.full([size], None, dtype=object)
+    self._num_candidates = 0
+
+  @property
+  def buffer(self):
+    return self._buffer[:self.num_elements]
+
+  def insert(self, candidate):
+    """Consider this `candidate` for inclusion in this sampling buffer."""
+    self._num_candidates += 1
+    if self.num_elements < self.size:
+      self._buffer[self.num_elements] = candidate
+      self.num_elements += 1
+      return
+    idx = np.random.choice(self._num_candidates)
+    if idx < self.size:
+      self._buffer[idx] = candidate
+
+  def insert_all(self, candidates):
+    """Consider all `candidates` for inclusion in this sampling buffer."""
+    for candidate in candidates:
+      self.insert(candidate)
+
+  def num_available_spaces(self):
+    """The number of freely available spaces in this buffer."""
+    return self.size - self.num_elements
+
+  
+class ReservoirRcfrSolver(_RcfrSolver):
+  """RCFR with a reservoir buffer for storing regret data.
+
+  The average strategy is updated and stored in a full game-size table.
+  """
+
+  def __init__(self,
+               game,
+               models,
+               buffer_size,
+               truncate_negative=False):
+    self._buffer_size = buffer_size
+    super(ReservoirRcfrSolver, self).__init__(
+        game, models, truncate_negative=truncate_negative)
+    self._reservoirs = [
+        ReservoirBuffer(self._buffer_size) for _ in range(game.num_players())
+    ]
+
+  def evaluate_and_update_policy(self, train_fn):
+    """Performs a single step of policy evaluation and policy improvement.
+
+    Args:
+      train_fn: A (model, `tf.data.Dataset`) function that trains the given
+        regression model to accurately reproduce the x to y mapping given x-y
+        data.
+    """
+    sequence_weights = self._sequence_weights()
+    player_seq_features = self._root_wrapper.sequence_features
+    for regret_player in range(self._game.num_players()):
+      seq_prob_player = self._average_policy_update_player(regret_player)
+
+      regrets, seq_probs = (
+          self._root_wrapper.counterfactual_regrets_and_reach_weights(
+              regret_player, seq_prob_player, *sequence_weights))
+
+      if self._truncate_negative:
+        regrets = np.maximum(-relu(sequence_weights[regret_player]), regrets)
+
+      next_data = list(
+          zip(player_seq_features[regret_player], torch.unsqueeze(torch.Tensor(regrets), axis=1)))
+
+      self._reservoirs[regret_player].insert_all(next_data)
+
+      self._cumulative_seq_probs[seq_prob_player] += seq_probs
+
+      my_buffer = list(
+          torch.stack(a) for a in zip(*self._reservoirs[regret_player].buffer))
+
+      data = torch.utils.data.TensorDataset(*my_buffer)
+
+      regret_player_model = self._models[regret_player]
+      train_fn(regret_player_model, data)
+      sequence_weights[regret_player] = self._sequence_weights(regret_player)

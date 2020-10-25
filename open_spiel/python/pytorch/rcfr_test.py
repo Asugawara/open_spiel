@@ -417,6 +417,7 @@ class RcfrTest(parameterized.TestCase, TestCase):
     average_profile = root.sequence_weights_to_tabular_profile(
         cumulative_reach_weights)
     self.assertGreater(pyspiel.nash_conv(_GAME, average_profile), 0.91)
+    print(pyspiel.nash_conv(_GAME, average_profile))
 
     regret_player = 0
     sequence_weights = [
@@ -440,13 +441,17 @@ class RcfrTest(parameterized.TestCase, TestCase):
         root.sequence_features[regret_player],
         torch.unsqueeze(torch.Tensor(cumulative_regrets[regret_player]), axis=1))
       data = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
-      #data = data.repeat(num_epochs)
 
-      
-      for x, y in data:
-        print(x, y)
-        for model in models:
-          optimizer = torch.optim.Adam(model.parameters(), lr=0.005, amsgrad=True)
+      loss_fn = nn.SmoothL1Loss()
+      optimizer = torch.optim.Adam(models[regret_player].parameters(), lr=0.005, amsgrad=True)
+      for epoch in range(num_epochs):
+        for x, y in data:
+          optimizer.zero_grad()
+          output = models[regret_player](x)
+          loss = loss_fn(output, y)
+          loss.backward()
+          optimizer.step()
+        
 
       regret_player = reach_weights_player
 
@@ -455,6 +460,99 @@ class RcfrTest(parameterized.TestCase, TestCase):
     print(pyspiel.nash_conv(_GAME, average_profile))
     self.assertLess(pyspiel.nash_conv(_GAME, average_profile), 0.91)
     
+  @parameterized.parameters(list(itertools.product(_BOOLEANS, _BOOLEANS)))
+  def test_rcfr(self, bootstrap, truncate_negative):
+    num_epochs = 100
+    num_iterations = 2
+    models = [_new_model() for _ in range(_GAME.num_players())]
+
+    patient = z_torch.RcfrSolver(
+        _GAME, models, bootstrap=bootstrap, truncate_negative=truncate_negative)
+
+    def _train(model, data):
+      data = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
+
+      loss_fn = nn.SmoothL1Loss()
+      optimizer = torch.optim.Adam(model.parameters(), lr=0.005, amsgrad=True)
+      for epoch in range(num_epochs):
+        for x, y in data:
+          optimizer.zero_grad()
+          output = model(x)
+          loss = loss_fn(output, y)
+          loss.backward()
+          optimizer.step()
+
+    average_policy = patient.average_policy()
+    self.assertGreater(pyspiel.nash_conv(_GAME, average_policy), 0.91)
+
+    for _ in range(num_iterations):
+      patient.evaluate_and_update_policy(_train)
+
+    average_policy = patient.average_policy()
+    self.assertLess(pyspiel.nash_conv(_GAME, average_policy), 0.91)
+    
+    
+  def test_reservior_buffer_insert(self):
+    buffer_size = 10
+    patient = z_torch.ReservoirBuffer(buffer_size)
+
+    x_buffer = []
+    for i in range(buffer_size):
+      patient.insert(i)
+      x_buffer.append(i)
+      assert patient.num_elements == len(x_buffer)
+      self.assertEqual(x_buffer, patient.buffer)
+
+    assert patient.num_available_spaces() == 0
+
+    for i in range(buffer_size):
+      patient.insert(buffer_size + i)
+      assert patient.num_elements == buffer_size
+
+  def test_reservior_buffer_insert_all(self):
+    buffer_size = 10
+    patient = z_torch.ReservoirBuffer(buffer_size)
+
+    x_buffer = list(range(buffer_size))
+    patient.insert_all(x_buffer)
+    assert patient.num_elements == buffer_size
+    self.assertEqual(x_buffer, patient.buffer)
+
+    assert patient.num_available_spaces() == 0
+
+    x_buffer = list(range(buffer_size, 2 * buffer_size))
+    patient.insert_all(x_buffer)
+    assert patient.num_elements == buffer_size
+
+  def test_rcfr_with_buffer(self):
+    buffer_size = 12
+    num_epochs = 100
+    num_iterations = 2
+    models = [_new_model() for _ in range(_GAME.num_players())]
+
+    patient = z_torch.ReservoirRcfrSolver(_GAME, models, buffer_size=buffer_size)
+
+    def _train(model, data):
+      data = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
+
+      loss_fn = nn.SmoothL1Loss()
+      optimizer = torch.optim.Adam(model.parameters(), lr=0.005, amsgrad=True)
+      for epoch in range(num_epochs):
+        for x, y in data:
+          optimizer.zero_grad()
+          output = model(x)
+          loss = loss_fn(output, y)
+          loss.backward()
+          optimizer.step()
+
+    average_policy = patient.average_policy()
+    self.assertGreater(pyspiel.nash_conv(_GAME, average_policy), 0.91)
+
+    for _ in range(num_iterations):
+      patient.evaluate_and_update_policy(_train)
+
+    average_policy = patient.average_policy()
+    self.assertLess(pyspiel.nash_conv(_GAME, average_policy), 0.91)
     
     
 if __name__ == '__main__':
