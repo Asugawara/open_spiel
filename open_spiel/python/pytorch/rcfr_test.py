@@ -13,22 +13,18 @@ import torch.nn as nn
 from torch.testing._internal.common_utils import TestCase
 # Note: this import needs to come before Tensorflow to fix a malloc error.
 import pyspiel  # pylint: disable=g-bad-import-order
-import tensorflow.compat.v1 as tf
 
-from open_spiel.python.algorithms import z_torch
-from open_spiel.python.algorithms import rcfr
+from open_spiel.python.pytorch import rcfr
 
-tf.disable_v2_behavior()
-
-tf.enable_eager_execution()
-
-_GAME = pyspiel.load_game('kuhn_poker')
+_GAME = pyspiel.load_game('leduc_poker')
 _BOOLEANS = [False, True]
 
+_BATCH_SIZE = 12
 
 def _new_model():
-  return z_torch.DeepRcfrModel(
+  return rcfr.DeepRcfrModel(
       _GAME,
+      input_rank=_BATCH_SIZE+1,
       num_hidden_layers=1,
       num_hidden_units=13,
       num_hidden_factors=1,
@@ -36,24 +32,21 @@ def _new_model():
 
 
 class RcfrTest(parameterized.TestCase, TestCase):
-  def test_tensor_to_matrix(self):
-    tensor = np.random.random((2, 1))
-    print(rcfr.tensor_to_matrix(tensor))
-    print(z_torch.tensor_to_matrix(tensor))
+  def setUp(self):
+    super(RcfrTest, self).setUp()
     
   def test_with_one_hot_action_features_single_state_vector(self):
     information_state_features = [1., 2., 3.]
-    features = z_torch.with_one_hot_action_features(
+    features = rcfr.with_one_hot_action_features(
         information_state_features,
         legal_actions=[0, 1],
         num_distinct_actions=3)
-    print(features)
     self.assertEqual([
         [1., 2., 3., 1., 0., 0.],
         [1., 2., 3., 0., 1., 0.],
     ], features)
 
-    features = z_torch.with_one_hot_action_features(
+    features = rcfr.with_one_hot_action_features(
         information_state_features,
         legal_actions=[1, 2],
         num_distinct_actions=3)
@@ -67,21 +60,21 @@ class RcfrTest(parameterized.TestCase, TestCase):
     while state.is_chance_node():
       state.apply_action(state.legal_actions()[0])
     assert len(state.legal_actions()) == 2
-    features = z_torch.sequence_features(state, 3)
+    features = rcfr.sequence_features(state, 3)
 
     x = state.information_state_tensor()
     self.assertEqual([x + [1, 0, 0], x + [0, 1, 0]], features)
 
   def test_num_features(self):
-    assert z_torch.num_features(_GAME) == 13
+    assert rcfr.num_features(_GAME) == 13
 
   def test_root_state_wrapper_num_sequences(self):
-    root_state_wrapper = z_torch.RootStateWrapper(_GAME.new_initial_state())
+    root_state_wrapper = rcfr.RootStateWrapper(_GAME.new_initial_state())
     assert root_state_wrapper.num_player_sequences[0] == 12
     assert root_state_wrapper.num_player_sequences[1] == 12
     
   def test_root_state_wrapper_sequence_indices(self):
-    root_state_wrapper = z_torch.RootStateWrapper(_GAME.new_initial_state())
+    root_state_wrapper = rcfr.RootStateWrapper(_GAME.new_initial_state())
     self.assertEqual(
         {
             # Info state string -> initial sequence index map for player 1.
@@ -102,7 +95,7 @@ class RcfrTest(parameterized.TestCase, TestCase):
         root_state_wrapper.info_state_to_sequence_idx)
 
   def test_root_state_wrapper_sequence_features(self):
-    root_state_wrapper = z_torch.RootStateWrapper(_GAME.new_initial_state())
+    root_state_wrapper = rcfr.RootStateWrapper(_GAME.new_initial_state())
 
     p1_info_state_features = [
         [1., 0., 1., 0., 0., 0., 0., 0., 0., 0., 0.],
@@ -157,7 +150,7 @@ class RcfrTest(parameterized.TestCase, TestCase):
                         root_state_wrapper.sequence_features)
 
   def test_root_state_wrapper_sequence_terminal_values(self):
-    root_state_wrapper = z_torch.RootStateWrapper(_GAME.new_initial_state())
+    root_state_wrapper = rcfr.RootStateWrapper(_GAME.new_initial_state())
 
     expected_terminal_values = {}
     no_call_histories_p1_win = [
@@ -192,10 +185,10 @@ class RcfrTest(parameterized.TestCase, TestCase):
 
   def test_normalized_by_sum(self):
     self.assertEqual(
-        z_torch.normalized_by_sum([1., 2., 3., 4.]), [0.1, 0.2, 0.3, 0.4], rtol=1e-06, atol=1e-06)
+        rcfr.normalized_by_sum([1., 2., 3., 4.]), [0.1, 0.2, 0.3, 0.4], rtol=1e-06, atol=1e-06)
 
   def test_counterfactual_regrets_and_reach_weights_value_error(self):
-    root = z_torch.RootStateWrapper(_GAME.new_initial_state())
+    root = rcfr.RootStateWrapper(_GAME.new_initial_state())
 
     # Initialize arbitrary weights to generate an arbitrary profile.
     sequence_weights1_with_a_missing_sequence = [
@@ -235,7 +228,7 @@ class RcfrTest(parameterized.TestCase, TestCase):
       
       
   def test_counterfactual_regrets_and_reach_weights(self):
-    root = z_torch.RootStateWrapper(_GAME.new_initial_state())
+    root = rcfr.RootStateWrapper(_GAME.new_initial_state())
 
     # Initialize arbitrary weights to generate an arbitrary profile.
     sequence_weights1 = [
@@ -305,28 +298,28 @@ class RcfrTest(parameterized.TestCase, TestCase):
     self.assertEqual(weights, expected_reach_weights_given_sequence_weights, rtol=1e-06, atol=1e-06)
     
   def test_all_states(self):
-    states = z_torch.all_states(
+    states = rcfr.all_states(
         _GAME.new_initial_state(),
         depth_limit=-1,
         include_terminals=False,
         include_chance_states=False)
     self.assertEqual(len(list(states)), 24)
 
-    states = z_torch.all_states(
+    states = rcfr.all_states(
         _GAME.new_initial_state(),
         depth_limit=-1,
         include_terminals=True,
         include_chance_states=False)
     self.assertEqual(len(list(states)), 54)
 
-    states = z_torch.all_states(
+    states = rcfr.all_states(
         _GAME.new_initial_state(),
         depth_limit=-1,
         include_terminals=False,
         include_chance_states=True)
     self.assertEqual(len(list(states)), 28)
 
-    states = z_torch.all_states(
+    states = rcfr.all_states(
         _GAME.new_initial_state(),
         depth_limit=-1,
         include_terminals=True,
@@ -335,17 +328,17 @@ class RcfrTest(parameterized.TestCase, TestCase):
     
     
   def test_sequence_weights_to_tabular_profile(self):
-    root = z_torch.RootStateWrapper(_GAME.new_initial_state())
+    root = rcfr.RootStateWrapper(_GAME.new_initial_state())
 
     def policy_fn(state):
       """Generates a policy profile by treating sequence indices as weights."""
       info_state = state.information_state_string()
       sequence_offset = root.info_state_to_sequence_idx[info_state]
       num_actions = len(state.legal_actions())
-      return z_torch.normalized_by_sum(
+      return rcfr.normalized_by_sum(
           list(range(sequence_offset, sequence_offset + num_actions)))
 
-    profile = z_torch.sequence_weights_to_tabular_profile(root.root, policy_fn)
+    profile = rcfr.sequence_weights_to_tabular_profile(root.root, policy_fn)
 
     expected_profile = {
         # Player 1
@@ -376,7 +369,7 @@ class RcfrTest(parameterized.TestCase, TestCase):
     
     
   def test_cfr(self):
-    root = z_torch.RootStateWrapper(_GAME.new_initial_state())
+    root = rcfr.RootStateWrapper(_GAME.new_initial_state())
     num_half_iterations = 6
 
     cumulative_regrets = [np.zeros(n) for n in root.num_player_sequences]
@@ -392,7 +385,7 @@ class RcfrTest(parameterized.TestCase, TestCase):
       reach_weights_player = 1 if regret_player == 0 else 0
 
       regrets, reach = root.counterfactual_regrets_and_reach_weights(
-          regret_player, reach_weights_player, *z_torch.relu(cumulative_regrets))
+          regret_player, reach_weights_player, *rcfr.relu(cumulative_regrets))
 
       cumulative_regrets[regret_player] += regrets
       cumulative_reach_weights[reach_weights_player] += reach
@@ -406,7 +399,7 @@ class RcfrTest(parameterized.TestCase, TestCase):
     
   def test_rcfr_functions(self):
     models = [_new_model() for _ in range(_GAME.num_players())]
-    root = z_torch.RootStateWrapper(_GAME.new_initial_state())
+    root = rcfr.RootStateWrapper(_GAME.new_initial_state())
 
     num_half_iterations = 4
     num_epochs = 100
@@ -440,7 +433,7 @@ class RcfrTest(parameterized.TestCase, TestCase):
       data = torch.utils.data.TensorDataset(
         root.sequence_features[regret_player],
         torch.unsqueeze(torch.Tensor(cumulative_regrets[regret_player]), axis=1))
-      data = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
+      data = torch.utils.data.DataLoader(data, batch_size=_BATCH_SIZE, shuffle=True)
 
       loss_fn = nn.SmoothL1Loss()
       optimizer = torch.optim.Adam(models[regret_player].parameters(), lr=0.005, amsgrad=True)
@@ -466,11 +459,11 @@ class RcfrTest(parameterized.TestCase, TestCase):
     num_iterations = 2
     models = [_new_model() for _ in range(_GAME.num_players())]
 
-    patient = z_torch.RcfrSolver(
+    patient = rcfr.RcfrSolver(
         _GAME, models, bootstrap=bootstrap, truncate_negative=truncate_negative)
 
     def _train(model, data):
-      data = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
+      data = torch.utils.data.DataLoader(data, batch_size=_BATCH_SIZE, shuffle=True)
 
       loss_fn = nn.SmoothL1Loss()
       optimizer = torch.optim.Adam(model.parameters(), lr=0.005, amsgrad=True)
@@ -494,7 +487,7 @@ class RcfrTest(parameterized.TestCase, TestCase):
     
   def test_reservior_buffer_insert(self):
     buffer_size = 10
-    patient = z_torch.ReservoirBuffer(buffer_size)
+    patient = rcfr.ReservoirBuffer(buffer_size)
 
     x_buffer = []
     for i in range(buffer_size):
@@ -511,7 +504,7 @@ class RcfrTest(parameterized.TestCase, TestCase):
 
   def test_reservior_buffer_insert_all(self):
     buffer_size = 10
-    patient = z_torch.ReservoirBuffer(buffer_size)
+    patient = rcfr.ReservoirBuffer(buffer_size)
 
     x_buffer = list(range(buffer_size))
     patient.insert_all(x_buffer)
@@ -530,10 +523,10 @@ class RcfrTest(parameterized.TestCase, TestCase):
     num_iterations = 2
     models = [_new_model() for _ in range(_GAME.num_players())]
 
-    patient = z_torch.ReservoirRcfrSolver(_GAME, models, buffer_size=buffer_size)
+    patient = rcfr.ReservoirRcfrSolver(_GAME, models, buffer_size=buffer_size)
 
     def _train(model, data):
-      data = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
+      data = torch.utils.data.DataLoader(data, batch_size=_BATCH_SIZE, shuffle=True)
 
       loss_fn = nn.SmoothL1Loss()
       optimizer = torch.optim.Adam(model.parameters(), lr=0.005, amsgrad=True)

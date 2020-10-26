@@ -15,7 +15,8 @@ def tensor_to_matrix(tensor):
     tensor: The tensor to convert.
 
   Returns:
-    A TensorFlow matrix (rank-2 `tf.Tensor`).
+    A PyTorch matrix (rank-2 `torch.Tensor`).
+    
   Raises:
     ValueError: If `tensor` cannot be trivially converted to a matrix, i.e.
       `tensor` has a rank > 2.
@@ -41,7 +42,7 @@ def with_one_hot_action_features(state_features, legal_actions,
 
   Args:
     state_features: The features for the information state alone. Must be a
-      `tf.Tensor` with a rank less than or equal to (if batched) 2.
+      `torch.Tensor` with a rank less than or equal to (if batched) 2.
     legal_actions: The list of legal actions in this state. Determines the
       number of rows in the returned feature matrix.
     num_distinct_actions: The number of globally distinct actions in the game.
@@ -49,7 +50,7 @@ def with_one_hot_action_features(state_features, legal_actions,
       state features.
 
   Returns:
-    A `tf.Tensor` feature matrix with one row for each sequence and # state
+    A `torch.Tensor` feature matrix with one row for each sequence and # state
     features plus `num_distinct_actions`-columns.
 
   Raises:
@@ -77,7 +78,7 @@ def sequence_features(state, num_distinct_actions):
       game.
 
   Returns:
-    A `tf.Tensor` feature matrix with one row for each sequence.
+    A `torch.Tensor` feature matrix with one row for each sequence.
   """
   return with_one_hot_action_features(state.information_state_tensor(),
                                       state.legal_actions(),
@@ -467,7 +468,7 @@ def feedforward_evaluate(layers,
   """Evaluates `layers` as a feedforward neural network on `x`.
 
   Args:
-    layers: The neural network layers (`tf.Tensor` -> `tf.Tensor` callables).
+    layers: The neural network layers (`torch.Tensor` -> `torch.Tensor` callables).
     x: The array-like input to evaluate. Must be trivially convertible to a
       matrix (tensor rank <= 2).
     use_skip_connections: Whether or not to use skip connections between layers.
@@ -479,7 +480,7 @@ def feedforward_evaluate(layers,
       `layers`.
 
   Returns:
-    The `tf.Tensor` evaluation result.
+    The `torch.Tensor` evaluation result.
 
   Raises:
     ValueError: If `x` has a rank greater than 2.
@@ -503,7 +504,6 @@ def feedforward_evaluate(layers,
         zeros = torch.zeros([x.shape[0], padding])
         x = torch.cat([x, zeros], axis=1)
       elif padding < 0:
-        #x = tf.strided_slice(x, [0, 0], [x.shape[0], y.shape[1]])
         x = x[0:x.shape[0], 0:y.shape[1]]
       y = x + y
     x = y
@@ -514,9 +514,7 @@ class DeepRcfrModel(nn.Module):
   """A flexible deep feedforward RCFR model class.
 
   Properties:
-    layers: The `tf.keras.Layer` layers describing this  model.
-    trainable_variables: The trainable `tf.Variable`s in this model's `layers`.
-    losses: This model's layer specific losses (e.g. regularizers).
+    layers: The `torch.keras.Layer` layers describing this  model.
   """
 
   def __init__(self,
@@ -542,7 +540,7 @@ class DeepRcfrModel(nn.Module):
         matrix. When `num_hidden_units < num_hidden_units`, this is effectively
         implements weight sharing. Defaults to 0.
       hidden_activation: The activation function to apply over hidden layers.
-        Defaults to `tf.nn.relu`.
+        Defaults to `torch.nn.ReLU`.
       use_skip_connections: Whether or not to apply skip connections (layer
         output = layer(x) + x) on hidden layers. Zero padding or truncation is
         used to match the number of columns on layer inputs and outputs.
@@ -552,19 +550,20 @@ class DeepRcfrModel(nn.Module):
     self._use_skip_connections = use_skip_connections
     self._hidden_are_factored = num_hidden_factors > 0
     self._hidden_activation = hidden_activation
+    input_rank = game.information_state_tensor_shape()[0] + game.new_initial_state().num_distinct_actions()
 
     self.layers = []
     for _ in range(num_hidden_layers):
       if self._hidden_are_factored:
         self.layers.append(
             nn.Linear(
-              13,
+              input_rank,
               num_hidden_factors,
               bias=True))
 
       self.layers.append(
         nn.Linear(
-          num_hidden_factors,
+          num_hidden_factors if self._hidden_are_factored else input_rank,
           num_hidden_units,
           bias=True))
       if hidden_activation:
@@ -580,10 +579,6 @@ class DeepRcfrModel(nn.Module):
     x = torch.zeros([1, num_features(game)])
     for layer in self.layers:
       x = layer(x)
-
-    #self.trainable_variables = sum(
-    #    [layer.trainable_variables for layer in self.layers], [])
-    #self.losses = sum([layer.losses for layer in self.layers], [])
 
   def __call__(self, x):
     """Evaluates this model on `x`."""
@@ -606,13 +601,10 @@ class _RcfrSolver(object):
 
     Args:
       game: An OpenSpiel `Game`.
-      models: Current policy models (optimizable array-like -> `tf.Tensor`
+      models: Current policy models (optimizable array-like -> `torch.Tensor`
         callables) for both players.
       truncate_negative: Whether or not to truncate negative (approximate)
         cumulative regrets to zero to implement RCFR+. Defaults to `False`.
-      session: A TensorFlow `Session` to convert sequence weights from
-        `tf.Tensor`s produced by `models` to `np.array`s. If `None`, it is
-        assumed that eager mode is enabled. Defaults to `None`.
     """
     self._game = game
     self._models = models
@@ -647,7 +639,7 @@ class _RcfrSolver(object):
     """Performs a single step of policy evaluation and policy improvement.
 
     Args:
-      train_fn: A (model, `tf.data.Dataset`) function that trains the given
+      train_fn: A (model, `torch.data.Dataset`) function that trains the given
         regression model to accurately reproduce the x to y mapping given x-y
         data.
 
@@ -719,7 +711,7 @@ class RcfrSolver(_RcfrSolver):
     """Performs a single step of policy evaluation and policy improvement.
 
     Args:
-      train_fn: A (model, `tf.data.Dataset`) function that trains the given
+      train_fn: A (model, `torch.data.Dataset`) function that trains the given
         regression model to accurately reproduce the x to y mapping given x-y
         data.
     """
@@ -810,7 +802,7 @@ class ReservoirRcfrSolver(_RcfrSolver):
     """Performs a single step of policy evaluation and policy improvement.
 
     Args:
-      train_fn: A (model, `tf.data.Dataset`) function that trains the given
+      train_fn: A (model, `torch.data.Dataset`) function that trains the given
         regression model to accurately reproduce the x to y mapping given x-y
         data.
     """
