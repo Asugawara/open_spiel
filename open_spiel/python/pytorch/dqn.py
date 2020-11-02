@@ -24,6 +24,7 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from open_spiel.python import rl_agent
 
@@ -123,7 +124,6 @@ class MLP(nn.Module):
 
   def __call__(self, x):
     for layer in self.model:
-      #print(x.shape)
       x = layer(x)
     return x
   
@@ -186,39 +186,16 @@ class DQN(rl_agent.AbstractAgent):
     self._last_loss_value = None
 
     # Create required TensorFlow placeholders to perform the Q-network updates.
-    self._info_state_ph = torch.zeros(
-        size=[self._num_actions, state_representation_size])
-    self._action_ph = torch.zeros([self._num_actions])
-    self._reward_ph = torch.zeros([self._num_actions])
-    self._is_final_step_ph = torch.zeros([self._num_actions])
-    self._next_info_state_ph = torch.zeros(
-        size=[self._num_actions, state_representation_size])
-    self._legal_actions_mask_ph = torch.zeros(
-        size=[self._num_actions, num_actions])
-
     self._q_network = MLP(state_representation_size,
                                       self._layer_sizes, num_actions)
-    self._q_values = self._q_network(self._info_state_ph)
-    print("q_net fin")
 
     self._target_q_network = MLP(state_representation_size,
                                              self._layer_sizes, num_actions)
-    self._target_q_values = self._target_q_network(self._next_info_state_ph)
-    print("q_net_tar fin")
-
-    # Stop gradient to prevent updates to the target network while learning
-    # self._target_q_values = tf.stop_gradient(self._target_q_values)
-
-    # Create the loss operations.
-    # Sum a large negative constant to illegal action logits before taking the
-    # max. This prevents illegal action values from being considered as target.
-    illegal_actions = 1 - self._legal_actions_mask_ph
-    illegal_logits = illegal_actions * ILLEGAL_ACTION_LOGITS_PENALTY
 
     if loss_str == "mse":
-      self.loss_class = nn.MSELoss()
+      self.loss_class = F.mse_loss
     elif loss_str == "huber":
-      self.loss_class = nn.SmoothL1Loss()
+      self.loss_class = F.smooth_l1_loss
     else:
       raise ValueError("Not implemented, choose from 'mse', 'huber'.")
 
@@ -229,8 +206,6 @@ class DQN(rl_agent.AbstractAgent):
     else:
       raise ValueError("Not implemented, choose from 'adam' and 'sgd'.")
 
-    #self._learn_step = self._optimizer.minimize(self._loss)
-    #self._initialize()
 
   def step(self, time_step, is_evaluation=False, add_transition_record=True):
     """Returns the action to be taken and updates the Q-network if needed.
@@ -264,7 +239,8 @@ class DQN(rl_agent.AbstractAgent):
         self._last_loss_value = self.learn()
 
       if self._step_counter % self._update_target_network_every == 0:
-        self._target_q_network = copy.deepcopy(self._q_network)
+        self._target_q_network.load_state_dict(self._q_network.state_dict())
+        self._target_q_network.eval()
 
       if self._prev_timestep and add_transition_record:
         # We may omit record adding here if it's done elsewhere.
@@ -323,8 +299,8 @@ class DQN(rl_agent.AbstractAgent):
       action = np.random.choice(legal_actions)
       probs[legal_actions] = 1.0 / len(legal_actions)
     else:
-      info_state = np.reshape(info_state, [1, -1])
-      q_values = self._q_network(self._info_state_ph)[0]
+      info_state = torch.Tensor(np.reshape(info_state, [1, -1]))
+      q_values = self._q_network(info_state)[0]
       legal_q_values = q_values[legal_actions]
       action = legal_actions[torch.argmax(legal_q_values)]
       probs[action] = 1.0
@@ -355,29 +331,30 @@ class DQN(rl_agent.AbstractAgent):
       return None
 
     transitions = self._replay_buffer.sample(self._batch_size)
-    info_states = [t.info_state for t in transitions]
-    actions = torch.Tensor([t.action for t in transitions])
-    rewards = [t.reward for t in transitions]
-    next_info_states = [t.next_info_state for t in transitions]
-    are_final_steps = [t.is_final_step for t in transitions]
-    legal_actions_mask = [t.legal_actions_mask for t in transitions]
+    info_states = torch.Tensor([t.info_state for t in transitions])
+    actions = torch.LongTensor([t.action for t in transitions])
+    rewards = torch.Tensor([t.reward for t in transitions])
+    next_info_states = torch.Tensor([t.next_info_state for t in transitions])
+    are_final_steps = torch.Tensor([t.is_final_step for t in transitions])
+    legal_actions_mask = torch.Tensor([t.legal_actions_mask for t in transitions])
     
+    self._q_values = self._q_network(info_states)
+    self._target_q_values = self._target_q_network(next_info_states).detach()
     
-    self._q_values = self._q_network(torch.Tensor(info_states))
-    illegal_actions = 1 - self._legal_actions_mask_ph
+    illegal_actions = 1 - legal_actions_mask
     illegal_logits = illegal_actions * ILLEGAL_ACTION_LOGITS_PENALTY
-    max_next_q = torch.max(self._target_q_values + illegal_logits)
+    max_next_q = torch.max(self._target_q_values + illegal_logits, dim=-1)[0]
     target = (
-        self._reward_ph +
-        (1 - self._is_final_step_ph) * self._discount_factor * max_next_q)
+        rewards +
+        (1 - are_final_steps) * self._discount_factor * max_next_q)
     action_indices = torch.stack(
-        [torch.arange(self._q_values.shape[0]), actions])
-    #predictions = torch.gather(self._q_values, 0, index=action_indices)
+        [torch.arange(self._q_values.shape[0]), actions], dim=-1)
+    predictions = self._q_values[list(action_indices.T)]
     
+    loss = self.loss_class(predictions, target)
     
     self._optimizer.zero_grad()
-    loss = torch.mean(self.loss_class(self._q_values, target))
-    loss.backward(retain_graph=True)
+    loss.backward()
     self._optimizer.step()
     
     return loss
@@ -389,10 +366,6 @@ class DQN(rl_agent.AbstractAgent):
   @property
   def replay_buffer(self):
     return self._replay_buffer
-
-  @property
-  def info_state_ph(self):
-    return self._info_state_ph
 
   @property
   def loss(self):
