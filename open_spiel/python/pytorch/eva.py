@@ -277,7 +277,7 @@ class EVAAgent(object):
         self._agent.step(last_time_step_copy, add_transition_record=False)
       else:
         self._agent.step(self._last_time_step, add_transition_record=False)
-      q_values = self._agent._q_network(self._info_state)[0]
+      q_values = self._agent._q_network(self._info_state).detach()[0]
       # Update EVA: Q_eva = lambda q_theta(s_t) + (1-lambda) sum(Q_np(s_k, .))/K
       for a in legal_actions:
         q_theta = q_values[a]
