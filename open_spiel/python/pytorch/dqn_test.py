@@ -22,7 +22,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.testing._internal.common_utils import TestCase, run_tests
-
 from open_spiel.python import rl_environment
 from open_spiel.python.pytorch import dqn
 import pyspiel

@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""DQN agent implemented in TensorFlow."""
+"""DQN agent implemented in PyTorch."""
 
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import copy
 import collections
 import random
 import numpy as np
@@ -89,7 +88,7 @@ class ReplayBuffer(object):
   
 
 class MLP(nn.Module):
-  """A simple dense network built from linear layers above."""
+  """A simple network built from nn.linear layers."""
 
   def __init__(self,
                input_size,
@@ -103,7 +102,6 @@ class MLP(nn.Module):
       hidden_sizes: (list) sizes (number of units) of each hidden layer
       output_size: (int) number of outputs
       activate_final: (bool) should final layer should include a ReLU
-      name: (string): the name to give to this network
     """
 
     super(MLP, self).__init__()
@@ -128,7 +126,7 @@ class MLP(nn.Module):
     return x
   
 class DQN(rl_agent.AbstractAgent):
-  """DQN Agent implementation in TensorFlow.
+  """DQN Agent implementation in PyTorch.
 
   See open_spiel/python/examples/breakthrough_dqn.py for an usage example.
   """
@@ -185,7 +183,7 @@ class DQN(rl_agent.AbstractAgent):
     # Keep track of the last training loss achieved in an update step.
     self._last_loss_value = None
 
-    # Create required TensorFlow placeholders to perform the Q-network updates.
+    # Create the Q-network instances
     self._q_network = MLP(state_representation_size,
                                       self._layer_sizes, num_actions)
 
@@ -239,8 +237,8 @@ class DQN(rl_agent.AbstractAgent):
         self._last_loss_value = self.learn()
 
       if self._step_counter % self._update_target_network_every == 0:
+        # state_dict method returns a dictionary containing a whole state of the module.
         self._target_q_network.load_state_dict(self._q_network.state_dict())
-        self._target_q_network.eval()
 
       if self._prev_timestep and add_transition_record:
         # We may omit record adding here if it's done elsewhere.
@@ -343,13 +341,13 @@ class DQN(rl_agent.AbstractAgent):
     
     illegal_actions = 1 - legal_actions_mask
     illegal_logits = illegal_actions * ILLEGAL_ACTION_LOGITS_PENALTY
-    max_next_q = torch.max(self._target_q_values + illegal_logits, dim=-1)[0]
+    max_next_q = torch.max(self._target_q_values + illegal_logits, dim=1)[0]
     target = (
         rewards +
         (1 - are_final_steps) * self._discount_factor * max_next_q)
     action_indices = torch.stack(
-        [torch.arange(self._q_values.shape[0]), actions], dim=-1)
-    predictions = self._q_values[list(action_indices.T)]
+        [torch.arange(self._q_values.shape[0]), actions], dim=0)
+    predictions = self._q_values[list(action_indices)]
     
     loss = self.loss_class(predictions, target)
     
@@ -384,8 +382,8 @@ class DQN(rl_agent.AbstractAgent):
     return self._step_counter
 
   def get_weights(self):
-    variables = self._q_network.model
-    variables.append(self._target_q_network.model)
+    variables = [m.weight for m in self._q_network.model]
+    variables.append([m.weight for m in self._target_q_network.model])
     return variables
 
   def copy_with_noise(self, sigma=0.0, copy_weights=True):
@@ -408,16 +406,9 @@ class DQN(rl_agent.AbstractAgent):
     target_q_network = getattr(copied_object, "_target_q_network")
 
     if copy_weights:
-      copy_weights = tf.group(*[
-          va.assign(vb * (1 + sigma * tf.random.normal(vb.shape)))
-          for va, vb in zip(q_network.variables, self._q_network.variables)
-      ])
-      self._session.run(copy_weights)
-
-      copy_target_weights = tf.group(*[
-          va.assign(vb * (1 + sigma * tf.random.normal(vb.shape)))
-          for va, vb in zip(target_q_network.variables,
-                            self._target_q_network.variables)
-      ])
-      self._session.run(copy_target_weights)
+      with torch.no_grad():
+        for q_model in q_network.model:
+          q_model.weight *= (1 + sigma * torch.randn(q_model.weight.shape))
+        for tq_model in target_q_network.model:
+          tq_model.weight *= (1 + sigma * torch.randn(tq_model.weight.shape))
     return copied_object
