@@ -1,74 +1,3 @@
-# Copyright 2019 DeepMind Technologies Ltd. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# Lint as python3.
-r"""Policy Gradient based agents implemented in PyTorch.
-
-This class is composed of three policy gradient (PG) algorithms:
-
-- Q-based Policy Gradient (QPG): an "all-actions" advantage actor-critic
-algorithm differing from A2C in that all action values are used to estimate the
-policy gradient (as opposed to only using the action taken into account):
-
-    baseline = \sum_a pi_a * Q_a
-    loss = - \sum_a pi_a * (Q_a - baseline)
-
-where (Q_a - baseline) is the usual advantage. QPG is also known as Mean
-Actor-Critic (https://arxiv.org/abs/1709.00503).
-
-
-- Regret policy gradient (RPG): a PG algorithm inspired by counterfactual regret
-minimization (CFR). Unlike standard actor-critic methods (e.g. A2C), the loss is
-defined purely in terms of thresholded regrets as follows:
-
-    baseline = \sum_a pi_a * Q_a
-    loss = regret = \sum_a relu(Q_a - baseline)
-
-where gradients only flow through the action value (Q_a) part and are blocked on
-the baseline part (which is trained separately by usual MSE loss).
-The lack of negative sign in the front of the loss represents a switch from
-gradient ascent on the score to descent on the loss.
-
-
-- Regret Matching Policy Gradient (RMPG): inspired by regret-matching, the
-policy gradient is by weighted by the thresholded regret:
-
-    baseline = \sum_a pi_a * Q_a
-    loss = - \sum_a pi_a * relu(Q_a - baseline)
-
-
-These algorithms were published in NeurIPS 2018. Paper title: "Actor-Critic
-Policy Optimization in Partially Observable Multiagent Environment", the paper
-is available at: https://arxiv.org/abs/1810.09026.
-
-- Advantage Actor Critic (A2C): The popular advantage actor critic (A2C)
-algorithm. The algorithm uses the baseline (Value function) as a control variate
-to reduce variance of the policy gradient. The loss is only computed for the
-actions actually taken in the episode as opposed to a loss computed for all
-actions in the variants above.
-
-  advantages = returns - baseline
-  loss = -log(pi_a) * advantages
-
-The algorithm can be found in the textbook:
-https://incompleteideas.net/book/RLbook2018.pdf under the chapter on
-`Policy Gradients`.
-
-See  open_spiel/python/pytorch/losses/rl_losses_test.py for an example of the
-loss computation.
-"""
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -118,6 +47,7 @@ class RetrospectiveBuffer(object):
   def __init__(self, max_size):
     self.max_size = max_size
     self.data = []
+    self.theta = []
     self.total_seen = 0  # The number of items that have passed through.
 
   def __len__(self):
@@ -175,6 +105,7 @@ class ARMAC(rl_agent.AbstractAgent):
   """
 
   def __init__(self,
+               num_players,
                player_id,
                info_state_size,
                num_actions,
@@ -225,6 +156,7 @@ class ARMAC(rl_agent.AbstractAgent):
     loss_class = loss_class if loss_class else self._get_loss_class(loss_str)
     self._loss_class = loss_class
 
+    self.num_players = num_players
     self.player_id = player_id
     self._num_actions = num_actions
     self._layer_sizes = hidden_layers_sizes
@@ -311,7 +243,9 @@ class ARMAC(rl_agent.AbstractAgent):
     elif loss_str == "a2c":
       return rl_losses.BatchA2CLoss
 
-  def minimize_with_clipping(self, model, optimizer, loss):
+  def minimize_with_clipping(self, model, optimizer, loss, j):
+    import copy
+    self._buffer.theta[j] = copy(model.state_dict())
     optimizer.zero_grad()
     loss.backward()
     if self._max_global_gradient_norm is not None:
@@ -335,7 +269,124 @@ class ARMAC(rl_agent.AbstractAgent):
     action = np.random.choice(len(probs), p=probs)
     return action, probs
 
-  def step(self, time_step, is_evaluation=False):
+  # TODO how to make joint_policy
+  def _play_game(game, joint_policy):
+    """Play one game, return the trajectory."""
+    import copy
+    trajectory = Trajectory()
+    actions = []
+    state = game.new_initial_state()
+    while not state.is_terminal():
+      root = copy.deepcopy(state)
+      action = joint_policy[state.current_player()][state.info_state]  
+      trajectory.states.append(TrajectoryState(
+          state.observation_tensor(), state.current_player(),
+          state.legal_actions_mask(), action, joint_policy,
+          root.total_reward / root.explore_count))
+      action_str = state.action_to_string(state.current_player(), action)
+      actions.append(action_str)
+      state.apply_action(action)
+
+    trajectory.returns = state.returns()
+    return trajectory
+
+  def _counterfactual_regrets(self, regret_player, trajectory):
+    regrets = np.zeros(self.num_player_sequences[regret_player])
+    reach_weights = np.zeros(self.num_player_sequences[reach_weight_player])
+    def _walk_descendants(state, reach_probabilities, chance_reach_probability):
+      """Compute `state`'s counterfactual regrets and reach weights.
+
+      Args:
+        state: An OpenSpiel `State`.
+        reach_probabilities: The probability that each player plays to reach
+          `state`'s history.
+        chance_reach_probability: The probability that all chance outcomes in
+          `state`'s history occur.
+
+      Returns:
+        The counterfactual value of `state`'s history.
+      Raises:
+        ValueError if there are too few sequence weights at any information
+        state for any player.
+      """
+
+      if state.is_terminal():
+        player_reach = (
+            np.prod(reach_probabilities[:regret_player]) *
+            np.prod(reach_probabilities[regret_player + 1:]))
+
+        counterfactual_reach_prob = player_reach * chance_reach_probability
+        u = self.terminal_values[state.history_str()]
+        return u[regret_player] * counterfactual_reach_prob
+
+      elif state.is_chance_node():
+        v = 0.0
+        for action, action_prob in state.chance_outcomes():
+          v += _walk_descendants(
+              state.child(action), reach_probabilities,
+              chance_reach_probability * action_prob)
+        return v
+
+      player = state.current_player()
+      info_state = state.information_state_string(player)
+      sequence_idx_offset = self.info_state_to_sequence_idx[info_state]
+      actions = state.legal_actions(player)
+
+      sequence_idx_end = sequence_idx_offset + len(actions)
+      my_sequence_weights = sequence_weights[player][
+          sequence_idx_offset:sequence_idx_end]
+
+      if len(my_sequence_weights) < len(actions):
+        raise ValueError(
+            ("Invalid policy: Policy {player} at sequence offset "
+             "{sequence_idx_offset} has only {policy_len} elements but there "
+             "are {num_actions} legal actions.").format(
+                 player=player,
+                 sequence_idx_offset=sequence_idx_offset,
+                 policy_len=len(my_sequence_weights),
+                 num_actions=len(actions)))
+
+      policy = normalized_by_sum(my_sequence_weights)
+      action_values = np.zeros(len(actions))
+      state_value = 0.0
+
+      is_reach_weight_player_node = player == reach_weight_player
+      is_regret_player_node = player == regret_player
+
+      reach_prob = reach_probabilities[player]
+      for action_idx, action in enumerate(actions):
+        action_prob = policy[action_idx]
+        next_reach_prob = reach_prob * action_prob
+
+        if is_reach_weight_player_node:
+          reach_weight_player_plays_down_this_line = next_reach_prob > 0
+          if not reach_weight_player_plays_down_this_line:
+            continue
+          sequence_idx = sequence_idx_offset + action_idx
+          reach_weights[sequence_idx] += next_reach_prob
+
+        reach_probabilities[player] = next_reach_prob
+
+        action_value = _walk_descendants(
+            state.child(action), reach_probabilities, chance_reach_probability)
+
+        if is_regret_player_node:
+          state_value = state_value + action_prob * action_value
+        else:
+          state_value = state_value + action_value
+        action_values[action_idx] = action_value
+
+      reach_probabilities[player] = reach_prob
+
+      if is_regret_player_node:
+        regrets[sequence_idx_offset:sequence_idx_end] += (
+            action_values - state_value)
+      return state_value
+    _walk_descendants(trajectory.state, np.ones(num_players), 1.0)
+    return regrets
+
+
+  def step(self, game, time_step, n_step, is_evaluation=False):
     """Returns the action to be taken and updates the network if needed.
 
     Args:
@@ -357,7 +408,7 @@ class ARMAC(rl_agent.AbstractAgent):
       probs = []
 
     j = random.sample(range(n_step), 1)
-    trajectory = self.buffer.generate_trajectory(policy, opponent_policy)
+    trajectory = self._play_game(game, joint_policy)
     data = [self.player_id, j, trajectory.returns]
 
     if not is_evaluation:
