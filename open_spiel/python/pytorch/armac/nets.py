@@ -8,36 +8,45 @@ class BaseModel(nn.Module):
 
     super(BaseModel, self).__init__()
     self.layer1 = nn.Linear(input_size, 128)
-    self.layer2 = nn.Linear(input_size, 128)
+    self.layer2 = nn.Linear(256, 128)
 
   def forward(self, x):
     h1 = self.layer1(x)
-    h2 = F.relu(h1)
+    h2 = torch.cat([F.relu(h1), F.relu(-1 * h1)])
     h3 = h1 + self.layer2(h2)
-    return F.relu(h3)
+    return torch.cat([F.relu(h3), F.relu(-1 * h3)])
 
 class RNN(nn.Module):
-  def __init__(self, input_size):
+  def __init__(self, input_size, hidden_size=256):
     super(RNN, self).__init__()
-    self.layer1 = nn.Linear(input_size, 256)
-    self.rnn = nn.LSTM(512, 256)
-    self.B = BaseModel()
+    self.hidden_size = hidden_size
+    self.layer1 = nn.Linear(input_size, hidden_size)
+    self.rnn = nn.LSTM(hidden_size*2, hidden_size)
 
   def forward(self, x):
     h1 = self.layer1(x)
-    h2 = self.rnn(h1)
-    return self.B(h2)
+    h2 = torch.cat([F.relu(h1), F.relu(-1 * h1)], dim=0)
+    _, (h3, _) = self.rnn(h2.view(1, -1, self.hidden_size*2))
+    return h3.view(self.hidden_size)
 
 class GlobalCritic(nn.Module):
-  def __init__(self, input_size):
+  def __init__(self, player_rnn, input_size):
     super(GlobalCritic, self).__init__()
+    self.player_rnn = player_rnn
+    self.player_num = len(player_rnn)
     self.layer1 = nn.Linear(input_size, 128)
     self.layer2 = nn.Linear(input_size, 128)
-    self.B = BaseModel()
+    self.B = BaseModel(input_size)
 
-  def forward(self, state1, state2):
-    a0 = self.layer1(state1) + self.layer2(state2)
-    a1 = self.layer1(state2) + self.layer2(state1)
-    h1 = torch.cat(a0, a1)
+  def forward(self, x):
+    state = [self.player_rnn[i](x) for i in range(self.player_num)]
+    a0 = self.layer1(state[0]) + self.layer2(state[1])
+    a1 = self.layer1(state[1]) + self.layer2(state[0])
+    h1 = torch.cat([a0, a1], dim=0)
     h2 = self.B(h1)
     return h2
+
+# immediate regret = nn.Sequential(BaseModel, nn.linear(input, actions))
+# average regret = nn.Sequential(BaseModel, nn.linear(input, actions))
+# mean policy = nn.Sequential(BaseModel, nn.linear(input, actions))
+# share B
