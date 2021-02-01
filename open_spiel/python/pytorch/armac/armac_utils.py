@@ -1,8 +1,15 @@
 import numpy as np
+import random
 import torch
 import torch.nn.functional as F
+from collections import namedtuple
+
 from nets import RNN
-from losses.rl_losses import compute_regrets
+
+Transition = namedtuple(
+    "Transition",
+    "player_id reward history regret sampled_policy")
+
 
 class TrajectoryState(object):
   """A particular point along a trajectory."""
@@ -27,6 +34,59 @@ class Trajectory(object):
   def add(self, information_state, action, policy):
     self.states.append((information_state, action, policy))
 
+class ReplayBuffer(object):
+  """ReplayBuffer of fixed size with a FIFO replacement policy.
+
+  Stored transitions can be sampled uniformly.
+
+  The underlying datastructure is a ring buffer, allowing 0(1) adding and
+  sampling.
+  """
+
+  def __init__(self, replay_buffer_capacity):
+    self._replay_buffer_capacity = replay_buffer_capacity
+    self._data = []
+    self._next_entry_index = 0
+
+  def add(self, element):
+    """Adds `element` to the buffer.
+
+    If the buffer is full, the oldest element will be replaced.
+
+    Args:
+      element: data to be added to the buffer.
+    """
+    if len(self._data) < self._replay_buffer_capacity:
+      self._data.append(element)
+    else:
+      self._data[self._next_entry_index] = element
+      self._next_entry_index += 1
+      self._next_entry_index %= self._replay_buffer_capacity
+
+  def sample(self, num_samples):
+    """Returns `num_samples` uniformly sampled from the buffer.
+
+    Args:
+      num_samples: `int`, number of samples to draw.
+
+    Returns:
+      An iterable over `num_samples` random elements of the buffer.
+
+    Raises:
+      ValueError: If there are less than `num_samples` elements in the buffer
+    """
+    if len(self._data) < num_samples:
+      raise ValueError("{} elements could not be sampled from size {}".format(
+          num_samples, len(self._data)))
+    return random.sample(self._data, num_samples)
+
+  def __len__(self):
+    return len(self._data)
+
+  def __iter__(self):
+    return iter(self._data)
+
+
 class ARMACActor:
   def __init__(self, game, policy_net, sampled_joint_policy, sampled_critic_net, sampled_value_net, episodes):
     self.game = game
@@ -36,6 +96,7 @@ class ARMACActor:
     self.sampled_value_net = sampled_value_net
     self.sampled_joint_policy = sampled_joint_policy
     self.episodes = episodes
+    self.buffer = ReplayBuffer(1024)
 
   def _play_game(self, player_id):
     trajectory = Trajectory()
@@ -64,24 +125,58 @@ class ARMACActor:
 
 
   def act(self, player_id):
-    d = []
-    trajectory = self._play_game(player_id)
-    tmp = [player_id, trajectory.returns]
-    for history in trajectory.states:
-      if history.current_player == player_id:
-        info_state = torch.Tensor(history.observation)
-        legals_mask = torch.LongTensor(history.legals_mask)
+    for _ in range(self.episodes):
+      trajectory = self._play_game(player_id)
+      for history in trajectory.states:
+        if history.current_player == player_id:
+          info_state = torch.Tensor(history.observation)
 
-        policy = self.sampled_critic_net(info_state).detach()
-        policy_logits = F.softmax(policy, dim=0).mul(legals_mask)
-        action_value = self.sampled_value_net(info_state)
-        regret=None
-        #regret = compute_regrets(policy_logits, action_value)
-        f = tmp.copy()
-        f.append([history, regret, self.sampled_joint_policy])
-        d.append(f)
-    return d
+          critic_value = self.sampled_critic_net(info_state).detach()
+          action_value = self.sampled_value_net(info_state)
+          regret = critic_value - action_value
+          transition = Transition(
+              player_id=player_id,
+              reward=trajectory.returns[player_id],
+              history=history,
+              regret=regret,
+              sampled_policy=self.sampled_joint_policy[player_id]
+          )
+          self.buffer.add(transition)
 
 
 class ARMACLearner:
-  pass
+  def __init__(self, buffer, batch_size, critic_net):
+    self.buffer = buffer
+    self.batch_size = batch_size
+    self.critic_net = critic_net
+    self.eligibility_trace = None
+
+  def learn(self):
+    transitions = self.buffer.sample(self.batch_size)
+    for t in transitions:
+      pass
+
+  def _critic_update(self, transition, next_trasition, decay, step_size, lambda_):
+    history = transition.history
+    history_info_state = torch.Tensor(history.observation)
+    if torch.is_tensor(self.eligibility_trace):
+      self.eligibility_trace *= (decay * lambda_ * transition.sampled_policy(history_info_state))
+    else:
+      self.eligibility_trace = 1
+
+    action = history.action
+    next_info_state = torch.Tensor(next_trasition.history.observation)
+    next_state_policy = next_trasition.sampled_policy(next_info_state)
+    next_expected_value= torch.mul(next_state_policy, self.critic_net(next_info_state))
+    td_error = (next_trasition.reward + 
+        decay * torch.sum(next_expected_value).item() - 
+            self.critic_net(history_info_state).item())
+  
+    for param in self.critic_net.state_dict():
+      print(step_size * self.eligibility_trace * td_error)
+      print(self.critic_net.state_dict()[param])
+      self.critic_net.state_dict()[param] += step_size * self.eligibility_trace * td_error
+      print(self.critic_net.state_dict()[param])
+      break
+
+    

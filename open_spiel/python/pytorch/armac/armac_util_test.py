@@ -2,6 +2,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+
 from absl.testing import parameterized
 
 import copy
@@ -12,7 +13,7 @@ import torch.nn as nn
 import pyspiel
 
 from nets import BaseModel, GlobalCritic, RNN
-from armac_utils import ARMACActor
+from armac_utils import ARMACActor, ARMACLearner
 
 
 def setUp(game):
@@ -24,6 +25,8 @@ def setUp(game):
   B = BaseModel(RNN_HIDDEN_SIZE)
   sampled_joint_policy = []
   player_rnn = []
+  # テスト用につくっているだけ
+  # 本来はcriticのoutのlayerを変更してpolicy_netにする
   for _ in range(num_players):
     rnn = RNN(observation_size, RNN_HIDDEN_SIZE)
     player_rnn.append(rnn)
@@ -43,7 +46,7 @@ def setUp(game):
   return GAME, sampled_joint_policy, global_critic_network, immediate_regret_net
 
 
-class ARMACTest(parameterized.TestCase, TestCase):
+class ARMACActorTest(parameterized.TestCase, TestCase):
   @parameterized.parameters("tic_tac_toe", "kuhn_poker", "liars_dice")
   def test_play_game(self, game):
     GAME, sampled_joint_policy, _, _ = setUp(game)
@@ -51,7 +54,7 @@ class ARMACTest(parameterized.TestCase, TestCase):
       actor = ARMACActor(GAME, 
                          sampled_joint_policy[i], 
                          sampled_joint_policy, 
-                         None, None, None)
+                         None, None, 0)
       trajectory = actor._play_game(player_id=i)
       print(trajectory.states[0].action)
 
@@ -63,9 +66,25 @@ class ARMACTest(parameterized.TestCase, TestCase):
                          sampled_joint_policy[i], 
                          sampled_joint_policy, 
                          global_critic_net, 
-                         immediate_regret_net, None)
+                         immediate_regret_net, 10)
       actor.act(player_id=i)
 
+class ARMACLearnerTest(parameterized.TestCase, TestCase):
+  @parameterized.parameters("tic_tac_toe", "kuhn_poker", "liars_dice")
+  def test_critic_update(self, game):
+    GAME, sampled_joint_policy, global_critic_net, immediate_regret_net = setUp(game)
+
+    actor = ARMACActor(GAME, 
+                        sampled_joint_policy[1], 
+                        sampled_joint_policy, 
+                        global_critic_net, 
+                        immediate_regret_net, 10)
+    actor.act(player_id=1)
+    BATCH_SIZE = 4
+    learner = ARMACLearner(actor.buffer, BATCH_SIZE, global_critic_net)
+    transitions = actor.buffer.sample(BATCH_SIZE)
+    for i in range(len(transitions) - 1):
+      learner._critic_update(transitions[i], transitions[i+1], 0.9, 1, 0.9)
 
 
 if __name__=="__main__":
