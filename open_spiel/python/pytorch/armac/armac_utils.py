@@ -2,6 +2,7 @@ import numpy as np
 import random
 import torch
 import torch.nn.functional as F
+import torch.optim as optim
 from collections import namedtuple
 
 from nets import RNN
@@ -127,12 +128,13 @@ class ARMACActor:
   def act(self, player_id):
     for _ in range(self.episodes):
       trajectory = self._play_game(player_id)
+      # TODO use batch
       for history in trajectory.states:
         if history.current_player == player_id:
           info_state = torch.Tensor(history.observation)
 
           critic_value = self.sampled_critic_net(info_state).detach()
-          action_value = self.sampled_value_net(info_state)
+          action_value = self.sampled_value_net(info_state).detach()
           regret = critic_value - action_value
           transition = Transition(
               player_id=player_id,
@@ -145,16 +147,20 @@ class ARMACActor:
 
 
 class ARMACLearner:
-  def __init__(self, buffer, batch_size, critic_net):
+  def __init__(self, buffer, batch_size, critic_net, policy_net):
     self.buffer = buffer
     self.batch_size = batch_size
     self.critic_net = critic_net
+    self.policy_net = policy_net
+    self.policy_optimzer = optim.SGD(self.policy_net.parameters(), lr=0.01)
     self.eligibility_trace = None
 
-  def learn(self):
+  def learn(self, player_id):
     transitions = self.buffer.sample(self.batch_size)
-    for t in transitions:
-      pass
+    for i in range(len(transitions) - 1):
+      self._critic_update(transitions[i], transitions[i+1], 0.9, 1, 0.9)
+    
+    self._policy_update()
 
   def _critic_update(self, transition, next_trasition, decay, step_size, lambda_):
     history = transition.history
@@ -164,7 +170,6 @@ class ARMACLearner:
     else:
       self.eligibility_trace = 1
 
-    action = history.action
     next_info_state = torch.Tensor(next_trasition.history.observation)
     next_state_policy = next_trasition.sampled_policy(next_info_state)
     next_expected_value= torch.mul(next_state_policy, self.critic_net(next_info_state))
@@ -173,10 +178,16 @@ class ARMACLearner:
             self.critic_net(history_info_state).item())
   
     for param in self.critic_net.state_dict():
-      print(step_size * self.eligibility_trace * td_error)
-      print(self.critic_net.state_dict()[param])
       self.critic_net.state_dict()[param] += step_size * self.eligibility_trace * td_error
-      print(self.critic_net.state_dict()[param])
-      break
 
+  # TODO use batch transition -> transitions
+  def _policy_update(self, transition):
+    info_state = torch.Tensor(transition.history.observation)
+    regret = transition.regret
     
+    estimated = self.policy_net(info_state)
+    policy_loss = torch.mean(
+          F.mse_loss(estimated, regret))
+    self.policy_optimzer.zero_grad()
+    policy_loss.backward()
+    self.policy_optimzer.step()

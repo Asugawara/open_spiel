@@ -30,9 +30,9 @@ def setUp(game):
   for _ in range(num_players):
     rnn = RNN(observation_size, RNN_HIDDEN_SIZE)
     player_rnn.append(rnn)
-    print('rnn:',id(rnn))
+    # print('rnn:',id(rnn))
     policy_logits_layer = nn.Linear(RNN_HIDDEN_SIZE, num_actions)
-    print('policy_logits_layer: ', id(policy_logits_layer))
+    # print('policy_logits_layer: ', id(policy_logits_layer))
     sampled_joint_policy.append(nn.Sequential(rnn, B, policy_logits_layer))
   
   global_critic = GlobalCritic(player_rnn, RNN_HIDDEN_SIZE)
@@ -56,7 +56,7 @@ class ARMACActorTest(parameterized.TestCase, TestCase):
                          sampled_joint_policy, 
                          None, None, 0)
       trajectory = actor._play_game(player_id=i)
-      print(trajectory.states[0].action)
+      #print(trajectory.states[0].action)
 
   @parameterized.parameters("tic_tac_toe", "kuhn_poker", "liars_dice")
   def test_act(self, game):
@@ -69,23 +69,46 @@ class ARMACActorTest(parameterized.TestCase, TestCase):
                          immediate_regret_net, 10)
       actor.act(player_id=i)
 
+
+
 class ARMACLearnerTest(parameterized.TestCase, TestCase):
   @parameterized.parameters("tic_tac_toe", "kuhn_poker", "liars_dice")
   def test_critic_update(self, game):
     GAME, sampled_joint_policy, global_critic_net, immediate_regret_net = setUp(game)
-
+    PLAYER_ID = 1
     actor = ARMACActor(GAME, 
-                        sampled_joint_policy[1], 
+                        sampled_joint_policy[PLAYER_ID], 
                         sampled_joint_policy, 
                         global_critic_net, 
                         immediate_regret_net, 10)
-    actor.act(player_id=1)
+    actor.act(PLAYER_ID)
     BATCH_SIZE = 4
-    learner = ARMACLearner(actor.buffer, BATCH_SIZE, global_critic_net)
+    learner = ARMACLearner(actor.buffer, 
+                           BATCH_SIZE, 
+                           global_critic_net, 
+                           sampled_joint_policy[PLAYER_ID])
     transitions = actor.buffer.sample(BATCH_SIZE)
     for i in range(len(transitions) - 1):
       learner._critic_update(transitions[i], transitions[i+1], 0.9, 1, 0.9)
 
+  @parameterized.parameters("tic_tac_toe", "kuhn_poker", "liars_dice")
+  def test_policy_update(self, game):
+    GAME, sampled_joint_policy, global_critic_net, immediate_regret_net = setUp(game)
+    PLAYER_ID = 1
+    actor = ARMACActor(GAME, 
+                        sampled_joint_policy[PLAYER_ID], 
+                        sampled_joint_policy, 
+                        global_critic_net, 
+                        immediate_regret_net, 10)
+    actor.act(PLAYER_ID)
+    BATCH_SIZE = 4
+    learner = ARMACLearner(actor.buffer, 
+                           BATCH_SIZE, 
+                           global_critic_net, 
+                           sampled_joint_policy[PLAYER_ID])
+    transitions = actor.buffer.sample(BATCH_SIZE)
+    for t in transitions:
+      learner._policy_update(t)
 
 if __name__=="__main__":
   run_tests()
