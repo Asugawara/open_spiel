@@ -89,13 +89,12 @@ class ReplayBuffer(object):
 
 
 class ARMACActor:
-  def __init__(self, game, policy_net, sampled_joint_policy, sampled_critic_net, sampled_value_net, episodes):
+  def __init__(self, game, policy_net, sampled_joint_policy, sampled_critic_net, episodes):
     self.game = game
     self.num_players = game.num_players()
     self.plicy_net = policy_net
-    self.sampled_critic_net = sampled_critic_net
-    self.sampled_value_net = sampled_value_net
     self.sampled_joint_policy = sampled_joint_policy
+    self.sampled_critic_net = sampled_critic_net
     self.episodes = episodes
     self.buffer = ReplayBuffer(1024)
 
@@ -134,7 +133,7 @@ class ARMACActor:
           info_state = torch.Tensor(history.observation)
 
           critic_value = self.sampled_critic_net(info_state).detach()
-          action_value = self.sampled_value_net(info_state).detach()
+          action_value = self.sampled_joint_policy[player_id](info_state).detach()
           regret = critic_value - action_value
           transition = Transition(
               player_id=player_id,
@@ -155,12 +154,12 @@ class ARMACLearner:
     self.policy_optimzer = optim.SGD(self.policy_net.parameters(), lr=0.01)
     self.eligibility_trace = None
 
-  def learn(self, player_id):
+  def learn(self):
     transitions = self.buffer.sample(self.batch_size)
     for i in range(len(transitions) - 1):
       self._critic_update(transitions[i], transitions[i+1], 0.9, 1, 0.9)
-    
-    self._policy_update()
+      # TODO use batch
+      self._policy_update(transitions[i])
 
   def _critic_update(self, transition, next_trasition, decay, step_size, lambda_):
     history = transition.history
