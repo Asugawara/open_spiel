@@ -81,6 +81,13 @@ class ReplayBuffer(object):
           num_samples, len(self._data)))
     return random.sample(self._data, num_samples)
 
+  def sample_sequence(self, num_samples):
+    if len(self._data) < num_samples:
+      raise ValueError("{} elements could not be sampled from size {}".format(
+          num_samples, len(self._data)))
+    index = random.sample([i for i in range(len(self._data) - 1)], num_samples)
+    return [{'history': self._data[i], 'next_state':self._data[i+1]} for i in index]
+
   def __len__(self):
     return len(self._data)
 
@@ -150,34 +157,46 @@ class ARMACLearner:
     self.buffer = buffer
     self.batch_size = batch_size
     self.critic_net = critic_net
+    self.critic_optimzer = optim.SGD(self.critic_net.parameters(), lr=0.01)
     self.policy_net = policy_net
     self.policy_optimzer = optim.SGD(self.policy_net.parameters(), lr=0.01)
     self.eligibility_trace = None
 
-  def learn(self):
-    transitions = self.buffer.sample(self.batch_size)
-    for i in range(len(transitions) - 1):
-      self._critic_update(transitions[i], transitions[i+1], 0.9, 1, 0.9)
-      # TODO use batch
-      self._policy_update(transitions[i])
+  def learn(self, learning_steps):
+    for _ in range(learning_steps):
+      #transitions = self.buffer.sample(self.batch_size)
+      transitions = self.buffer.sample_sequence(self.batch_size)
+      for t in transitions:
+        self._critic_update(t['history'], t['next_state'], 0.1, 0.05, 0.1)
+        # TODO use batch
+        self._policy_update(t['history'])
 
+  #TODO next_transition is not next_state
   def _critic_update(self, transition, next_trasition, decay, step_size, lambda_):
     history = transition.history
     history_info_state = torch.Tensor(history.observation)
-    if torch.is_tensor(self.eligibility_trace):
-      self.eligibility_trace *= (decay * lambda_ * transition.sampled_policy(history_info_state))
+    history_action = history.action
+    if self.eligibility_trace:
+      history_policy = F.softmax(transition.sampled_policy(history_info_state).detach(), dim=0)
+      self.eligibility_trace *= (
+          decay * lambda_ * history_policy[history_action])
     else:
       self.eligibility_trace = 1
 
-    next_info_state = torch.Tensor(next_trasition.history.observation)
-    next_state_policy = next_trasition.sampled_policy(next_info_state)
+    next_state = next_trasition.history
+    next_info_state = torch.Tensor(next_state.observation)
+    next_legal_mask = torch.LongTensor(next_state.legals_mask)
+    next_state_policy = next_trasition.sampled_policy(next_info_state).detach()
+    next_state_policy = F.softmax(
+        torch.mul(next_state_policy, next_legal_mask), dim=0)
     next_expected_value= torch.mul(next_state_policy, self.critic_net(next_info_state))
     td_error = (next_trasition.reward + 
-        decay * torch.sum(next_expected_value).item() - 
-            self.critic_net(history_info_state).item())
+        decay * torch.sum(next_expected_value) - 
+            self.critic_net(history_info_state))
   
-    for param in self.critic_net.state_dict():
-      self.critic_net.state_dict()[param] += step_size * self.eligibility_trace * td_error
+    self.critic_optimzer.zero_grad()
+    td_error.backward()
+    self.critic_optimzer.step()
 
   # TODO use batch transition -> transitions
   def _policy_update(self, transition):

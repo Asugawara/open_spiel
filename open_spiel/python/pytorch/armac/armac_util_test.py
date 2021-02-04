@@ -120,7 +120,8 @@ class ARMACLearnerTest(parameterized.TestCase, TestCase):
                            BATCH_SIZE, 
                            global_critic_net, 
                            sampled_joint_policy[PLAYER_ID])
-    learner.learn()
+    LEARNING_STEPS = 2
+    learner.learn(LEARNING_STEPS)
 
 if __name__=="__main__":
   run_tests()
