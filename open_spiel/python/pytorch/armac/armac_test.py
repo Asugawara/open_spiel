@@ -16,7 +16,7 @@ from armac import armac
 class ARMACTest(parameterized.TestCase, TestCase):
   @parameterized.parameters("kuhn_poker", "leduc_poker")
   def test_armac(self, game):
-      armac(game, 10, 2, 5, 2)
+      armac(game, 10, 64, 5, 2)
 
 
 if __name__=="__main__":

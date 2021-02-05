@@ -1,6 +1,8 @@
 import numpy as np
 import random
+from open_spiel.python import policy
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from collections import namedtuple
@@ -15,8 +17,9 @@ Transition = namedtuple(
 class TrajectoryState(object):
   """A particular point along a trajectory."""
 
-  def __init__(self, observation, current_player, legals_mask, action, policy,
+  def __init__(self, information_state ,observation, current_player, legals_mask, action, policy,
                value):
+    self.information_state = information_state
     self.observation = observation
     self.current_player = current_player
     self.legals_mask = legals_mask
@@ -96,16 +99,25 @@ class ReplayBuffer(object):
 
 
 class ARMACActor:
-  def __init__(self, game, policy_net, sampled_joint_policy, sampled_critic_net, episodes):
+  def __init__(self, game, policy_net_list, sampled_joint_policy, sampled_critic_net, episodes):
     self.game = game
     self.num_players = game.num_players()
-    self.plicy_net = policy_net
+    self.policy_net_list = policy_net_list
     self.sampled_joint_policy = sampled_joint_policy
     self.sampled_critic_net = sampled_critic_net
     self.episodes = episodes
     self.buffer = ReplayBuffer(1024)
 
-  def _play_game(self, player_id):
+  def factory_policy(self, player_id):
+    if random.random()>=0.5:
+      policy_ = self.policy_net_list[player_id]
+    else:
+      policy_ = policy.UniformRandomPolicy
+    opponent_policy = policy.UniformRandomPolicy
+    return policy_, opponent_policy
+
+  def _play_game(self, player_id, policy , opponent_policy):
+    # implement epsilon_greedy
     trajectory = Trajectory()
     state = self.game.new_initial_state()
     while not state.is_terminal():
@@ -114,33 +126,37 @@ class ARMACActor:
         action_list, prob_list = zip(*outcomes)
         action = np.random.choice(action_list, p=prob_list)
       else:
-        info_state = torch.Tensor(state.observation_tensor(player_id))
+        observation = torch.Tensor(state.observation_tensor(state.current_player()))
         if state.current_player() == player_id:
-          policy = self.plicy_net(info_state).detach()
+          policy = self.policy_net(observation).detach()
         else:
-          policy = self.sampled_joint_policy[state.current_player()](info_state).detach()
+          policy = self.sampled_joint_policy[state.current_player()](observation).detach()
         legal_actions_mask = torch.LongTensor(state.legal_actions_mask())
         policy = F.softmax(policy, dim=0).mul(legal_actions_mask)
         action = torch.max(policy, dim=0)[1]
+        info_state = torch.Tensor(
+            [state.observation_tensor(i) for i in range(self.num_players)])
         trajectory.states.append(TrajectoryState(
-            state.observation_tensor(), state.current_player(),
-            state.legal_actions_mask(), action, policy, value=0))
+            info_state, observation, 
+            state.current_player(), state.legal_actions_mask(), 
+            action, policy, value=0))
       state.apply_action(action)
 
     trajectory.returns = state.returns()
     return trajectory
 
 
-  def act(self, player_id):
-    for _ in range(self.episodes):
-      trajectory = self._play_game(player_id)
+  def act(self):
+    # TODO deffer from between early stage and later stage
+    for i in range(self.episodes):
+      player_id = i % self.num_players
+      policy_ , opponent_policy = self.factory_policy(player_id)
+      trajectory = self._play_game(player_id, policy_ , opponent_policy)
       # TODO use batch
       for history in trajectory.states:
         if history.current_player == player_id:
-          info_state = torch.Tensor(history.observation)
-
-          critic_value = self.sampled_critic_net(info_state).detach()
-          action_value = self.sampled_joint_policy[player_id](info_state).detach()
+          critic_value = self.sampled_critic_net(history.information_state).detach()
+          action_value = self.sampled_joint_policy[player_id](history.observation).detach()
           regret = critic_value - action_value
           transition = Transition(
               player_id=player_id,
@@ -171,39 +187,38 @@ class ARMACLearner:
         # TODO use batch
         self._policy_update(t['history'])
 
-  #TODO next_transition is not next_state
   def _critic_update(self, transition, next_trasition, decay, step_size, lambda_):
     history = transition.history
-    history_info_state = torch.Tensor(history.observation)
     history_action = history.action
     if self.eligibility_trace:
-      history_policy = F.softmax(transition.sampled_policy(history_info_state).detach(), dim=0)
+      history_policy = F.softmax(self.policy_net(history.observation).detach(), dim=0)
       self.eligibility_trace *= (
           decay * lambda_ * history_policy[history_action])
     else:
       self.eligibility_trace = 1
 
     next_state = next_trasition.history
-    next_info_state = torch.Tensor(next_state.observation)
+    next_info_state = next_state.information_state
     next_legal_mask = torch.LongTensor(next_state.legals_mask)
-    next_state_policy = next_trasition.sampled_policy(next_info_state).detach()
+    next_state_policy = self.policy_net(next_state.observation).detach()
     next_state_policy = F.softmax(
         torch.mul(next_state_policy, next_legal_mask), dim=0)
     next_expected_value= torch.mul(next_state_policy, self.critic_net(next_info_state))
-    td_error = (next_trasition.reward + 
-        decay * torch.sum(next_expected_value) - 
-            self.critic_net(history_info_state))
-  
+    td_error = nn.MSELoss()
+    loss = td_error(
+        self.critic_net(history.information_state), 
+        next_trasition.reward + decay * torch.sum(next_expected_value))
+    loss *= step_size * self.eligibility_trace
     self.critic_optimzer.zero_grad()
-    td_error.backward()
+    loss.backward()
     self.critic_optimzer.step()
 
   # TODO use batch transition -> transitions
   def _policy_update(self, transition):
-    info_state = torch.Tensor(transition.history.observation)
+    observation = torch.Tensor(transition.history.observation)
     regret = transition.regret
     
-    estimated = self.policy_net(info_state)
+    estimated = self.policy_net(observation)
     policy_loss = torch.mean(
           F.mse_loss(estimated, regret))
     self.policy_optimzer.zero_grad()

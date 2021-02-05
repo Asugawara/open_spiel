@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from nets import BaseModel, GlobalCritic, RNN
+from nets import BaseModel, GlobalCritic, RNN, MLP_torso
 from armac_utils import ARMACActor, ARMACLearner
 from open_spiel.python import policy
 from open_spiel.python.algorithms import exploitability
@@ -43,55 +43,56 @@ class Buffer(object):
 
 
 
-def armac(game, epochs, episodes, learning_steps, eval_interval):
+def armac(game, epochs, episodes, learning_steps, eval_interval, use_rnn=False):
   GAME = pyspiel.load_game(game)
   num_actions = GAME.num_distinct_actions()
   num_players = GAME.num_players()
   observation_size = GAME.observation_tensor_size()
-  RNN_HIDDEN_SIZE = 256
-  
-  player_rnn = []
+  HEAD_HIDDEN_SIZE = 256
+  player_head = []
   for _ in range(num_players):
-    rnn = RNN(observation_size, RNN_HIDDEN_SIZE)
-    player_rnn.append(rnn)
-  
-  global_critic_head = GlobalCritic(player_rnn, RNN_HIDDEN_SIZE)
-  out_critic = nn.Linear(RNN_HIDDEN_SIZE, 1)
+    if use_rnn:
+      head = RNN(observation_size, HEAD_HIDDEN_SIZE)
+    else:
+      head = MLP_torso(observation_size, HEAD_HIDDEN_SIZE)
+    player_head.append(head)
+    
+  global_critic_head = GlobalCritic(player_head, HEAD_HIDDEN_SIZE)
+  out_critic = nn.Linear(HEAD_HIDDEN_SIZE, 1)
   global_critic_network = nn.Sequential(global_critic_head, out_critic)
 
   policy_network_list = []
-  for _ in range(num_players):
-    out_policy = nn.Linear(RNN_HIDDEN_SIZE, num_actions)
-    policy_network_list.append(nn.Sequential(global_critic_head, out_policy))
+  B = BaseModel(HEAD_HIDDEN_SIZE)
+  for head in player_head:
+    out_policy = nn.Linear(HEAD_HIDDEN_SIZE, num_actions)
+    policy_network_list.append(nn.Sequential(head, B, out_policy))
 
   for t in range(epochs):
     # TODO implement adaptive policy
     D = Buffer(1024)
     PLAYER_ID = t%num_players
-    for ep in range(episodes):
-      if len(D):
-        sampled_net_states = D.sample(1)
-      else:
-        sampled_net_states = [global_critic_network.state_dict(),
-            [net.state_dict() for net in policy_network_list]]
-      sampled_critic_network = copy.copy(global_critic_network)
-      sampled_critic_network.load_state_dict(sampled_net_states[0])
+    if len(D):
+      sampled_net_states = D.sample(1)
+    else:
+      sampled_net_states = [global_critic_network.state_dict(),
+          [net.state_dict() for net in policy_network_list]]
+    sampled_critic_network = copy.copy(global_critic_network)
+    sampled_critic_network.load_state_dict(sampled_net_states[0])
 
-      sampled_policy_network_list = []
-      for i in range(num_players):
-        sampled_policy_network = copy.copy(policy_network_list[0])
-        sampled_policy_network.load_state_dict(sampled_net_states[1][i])
-        sampled_policy_network_list.append(sampled_policy_network)
+    sampled_policy_network_list = []
+    for i in range(num_players):
+      sampled_policy_network = copy.copy(policy_network_list[0])
+      sampled_policy_network.load_state_dict(sampled_net_states[1][i])
+      sampled_policy_network_list.append(sampled_policy_network)
 
-      actor = ARMACActor(GAME, 
-                         policy_network_list[PLAYER_ID], 
-                         sampled_policy_network_list, 
-                         sampled_critic_network, 
-                         10)
-      actor.act(PLAYER_ID)
-    # ep finish
+    actor = ARMACActor(GAME, 
+                        policy_network_list[PLAYER_ID], 
+                        sampled_policy_network_list, 
+                        sampled_critic_network, 
+                        episodes)
+    actor.act()
 
-    BATCH_SIZE = 4
+    BATCH_SIZE = 32
     learner = ARMACLearner(actor.buffer, 
                             BATCH_SIZE, 
                             global_critic_network, 
