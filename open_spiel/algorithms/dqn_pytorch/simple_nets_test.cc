@@ -34,14 +34,18 @@ void TestModelCreation() {
 
   std::shared_ptr<const Game> game = LoadGame("clobber");
 
+  for (auto e: game->ObservationTensorShape()) {
+    std::cout<<e<<std::endl;
+  }
+
   MLPConfig mlp_config = {
-      /*input_size=*/game->ObservationTensorShape(),
+      /*input_size=*/game->ObservationTensorShape()[0],
       /*hidden_size=*/{128,128},
       /*output_size=*/game->NumDistinctActions()};
   MLP mlp(mlp_config);
 
-  std::cout << "Good! The network looks like:\n" << mlp << std::endl;
-}
+  std::cout << "The network:\n" << mlp << std::endl;
+};
 
 }
 }  // namespace torch_dqn

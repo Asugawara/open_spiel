@@ -20,57 +20,16 @@
 #include <string>
 #include <vector>
 
+#include "open_spiel/algorithms/dqn_pytorch/simple_nets.h"
+#include "open_spiel/policy.h"
+#include "open_spiel/spiel.h"
+#include "open_spiel/utils/circular_buffer.h"
 
 namespace open_spiel {
 namespace algorithms {
 namespace torch_dqn {
 
-std::istream& operator>>(std::istream& stream, MLPConfig& config) {
-  stream >> config.input_size >> config.hidden_size >> config.out_size;
-  return stream;
-};
-
-std::ostream& operator<<(std::ostream& stream, const MLPConfig& config) {
-  stream << config.input_size;
-  return stream;
-};
-
-SonnetLinearImpl::SonnetLinearImpl(int input_size, int output_size, bool activate_relu=false)
-   : sonnet_linear(torch::nn::Linear(
-     /*input_size*/input_size,
-     /*output_size*/output_size)) {
-  activate_relu_ = activate_relu;
-  register_module("sonnet_linear", sonnet_linear);
-};
-
-torch::Tensor SonnetLinearImpl::forward(torch::Tensor x) {
-  if (activate_relu_) {
-    return torch::relu(sonnet_linear(x));
-  } else {
-    return sonnet_linear(x);
-  };
-};
-
-MLPImpl::MLPImpl(const MLPConfig& config) {
-  int input_size = config.input_size;
-  for (auto h_size: config.hidden_size) {
-    SonnetLinear sonnet_linear(/*input_size*/input_size,
-                               /*output_size*/h_size);
-    layers_->push_back(sonnet_linear);
-    input_size = h_size;
-  };
-  SonnetLinear sonnet_linear(/*input_size*/input_size,
-                            /*output_size*/config.output_size,
-                            /*activate_final*/config.activate_final);
-  layers_->push_back(sonnet_linear);
-  register_module("layers", layers_);
-};
-
-torch::Tensor MLPImpl::forward(torch::Tensor x) {
-  return this->forward_(x);
-}
-
-DQN::DQN()
+DQN::DQN(const Game& game)
 
 CircularBuffer<hogehoge> replay_buffer(replay_buffer_size);
   

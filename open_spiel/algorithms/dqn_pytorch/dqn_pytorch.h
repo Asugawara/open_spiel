@@ -19,8 +19,6 @@
 
 #include <memory>
 #include <random>
-#include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "open_spiel/abseil-cpp/absl/random/distributions.h"
@@ -33,38 +31,14 @@ namespace open_spiel {
 namespace algorithms {
 namespace torch_dqn {
 
-struct MLPConfig {
-  int input_size;
-  std::vector<int> hidden_size;
-  int output_size;
-  bool activate_final;
+struct Transition {
+  int info_state;
+  int action;
+  int reward;
+  int next_info_state;
+  bool is_final_step;
+  int legal_actions_mask;
 };
-
-std::istream& operator>>(std::istream& stream, MLPConfig& config);
-std::ostream& operator<<(std::ostream& stream, const MLPConfig& config);
-
-class SonnetLinearImpl : public torch::nn::Module {
-  public :
-    SonnetLinearImpl(int input_size, int output_size, bool activate_relu);
-    torch::Tensor forward(torch::Tensor x);
-  
-  private:
-    bool activate_relu_;
-    torch::nn::Linear sonnet_linear;
-};
-TORCH_MODULE(SonnetLinear);
-
-class MLPImpl : public torch::nn::Module {
-  public:
-    MLPImpl(const MLPConfig& config);
-    torch::Tensor forward(torch::Tensor x);
-
-  private:
-    torch::Tensor forward_(torch::Tensor x);
-    torch::nn::ModuleList layers_;
-
-};
-TORCH_MODULE(MLP);
 
 class DQN {
   public:

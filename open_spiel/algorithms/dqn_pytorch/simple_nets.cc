@@ -23,7 +23,7 @@ namespace algorithms {
 namespace torch_dqn {
 
 std::istream& operator>>(std::istream& stream, MLPConfig& config) {
-  stream >> config.input_size >> config.hidden_size >> config.out_size;
+  stream >> config.input_size >> config.output_size;
   return stream;
 };
 
