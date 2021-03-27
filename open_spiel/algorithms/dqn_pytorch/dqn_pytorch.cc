@@ -29,9 +29,13 @@ namespace open_spiel {
 namespace algorithms {
 namespace torch_dqn {
 
-DQN::DQN(const Game& game)
-
 CircularBuffer<hogehoge> replay_buffer(replay_buffer_size);
+
+DQN::DQN (const Game& game)
+  : game_(game) {
+
+}
+
   
 
 }  // namespace torch_dqn

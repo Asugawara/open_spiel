@@ -40,16 +40,23 @@ struct Transition {
   int legal_actions_mask;
 };
 
+
 class DQN {
   public:
-    DQN(const Game& game);
+    DQN(const Game& game, Player player_id, );
     virtual ~DQN() = default;
   private:
-    void step();
-    void add_transition();
-    void epsilon_greedy();
-    void get_epsilon();
-    void learn();
+    int player_id_;
+    int num_actions_;
+    int update_target_network_every_;
+    int learn_every_;
+    int replay_buffer_capacity_;
+    int batch_size_;
+    void Step();
+    void AddTransition();
+    void EpsilonGreedy();
+    void GetEpsilon();
+    void Learn();
 };
 
 }  // namespace torch_dqn
