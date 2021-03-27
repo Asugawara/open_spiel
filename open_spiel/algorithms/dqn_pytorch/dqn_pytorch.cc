@@ -20,7 +20,6 @@
 #include <string>
 #include <vector>
 
-#include "open_spiel/algorithms/dqn_pytorch/simple_nets.h"
 #include "open_spiel/policy.h"
 #include "open_spiel/spiel.h"
 #include "open_spiel/utils/circular_buffer.h"
@@ -31,11 +30,33 @@ namespace torch_dqn {
 
 CircularBuffer<hogehoge> replay_buffer(replay_buffer_size);
 
-DQN::DQN (const Game& game)
-  : game_(game) {
+DQN::DQN (const Game& game, Player player_id, MLPConfig mlp_config)
+    : game_(game.shared_from_this()),
+      player_id_(player_id),
+      q_network_(mlp(mlp_config)),
+      q_target_network_(mlp(mlp_config)),
+      optimizer_(q_network_->parameters(), 
+                 torch::optim::AdamOptions(mlp_config.learning_rate)) {
+  std::cout << q_network_ << std::endl;
+};
+
+Action DQN::Step(const State& state) {
+  if (state.IsTerminal()) {
+    return;
+  }
+  if (state.IsChanceNode()) {
+    for (const auto& action_prob : state.ChanceOutcomes()) {
+      state->ApplyAction(action_prob.first);
+    }
+  }
+  if (!state.IsTerminal() && state.CurrentPlayer() == player_id_) {
+    std::vector<float> info_state = state.InformationStateTensor(player_id_);
+    std::vector<Action> legal_actions = state.LegalActions(player_id_);
+    double epsilon = this->GetEpsilon(is_evaluation);
+    ActionsAndProbs action_prob = this->EpsilonGreedy(info_state, legal_actions, epsilon);
+  } 
 
 }
-
   
 
 }  // namespace torch_dqn

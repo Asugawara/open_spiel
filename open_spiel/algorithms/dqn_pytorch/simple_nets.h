@@ -18,6 +18,7 @@
 #include <torch/torch.h>
 
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include "open_spiel/policy.h"
@@ -32,6 +33,8 @@ struct MLPConfig {
   std::vector<int> hidden_size;
   int output_size;
   bool activate_final;
+  std::string loss_str;
+  double learning_rate;
 };
 
 std::istream& operator>>(std::istream& stream, MLPConfig& config);
@@ -52,8 +55,10 @@ class MLPImpl : public torch::nn::Module {
   public:
     MLPImpl(const MLPConfig& config);
     torch::Tensor forward(torch::Tensor x);
+    torch::Tensor losses(torch::Tensor input, torch::Tensor target);
 
   private:
+    std::string loss_str_;
     torch::Tensor forward_(torch::Tensor x);
     torch::nn::ModuleList layers_;
 

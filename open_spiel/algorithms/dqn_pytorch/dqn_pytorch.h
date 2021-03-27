@@ -24,8 +24,10 @@
 #include "open_spiel/abseil-cpp/absl/random/distributions.h"
 #include "open_spiel/abseil-cpp/absl/strings/string_view.h"
 #include "open_spiel/abseil-cpp/absl/types/optional.h"
+#include "open_spiel/algorithms/dqn_pytorch/simple_nets.h"
 #include "open_spiel/policy.h"
 #include "open_spiel/spiel.h"
+#include "open_spiel/spiel_utils.h"
 
 namespace open_spiel {
 namespace algorithms {
@@ -43,18 +45,22 @@ struct Transition {
 
 class DQN {
   public:
-    DQN(const Game& game, Player player_id, );
+    DQN(const Game& game, Player player_id, MLPConfig mlp_config);
     virtual ~DQN() = default;
+  protected:
+    std::shared_ptr<const Game> game_;
   private:
     int player_id_;
-    int num_actions_;
     int update_target_network_every_;
     int learn_every_;
     int replay_buffer_capacity_;
     int batch_size_;
-    void Step();
+    MLP q_network_;
+    MLP target_q_network_;
+    torch::optim::Adam model_optimizer_;
+    Action Step(const State& state);
     void AddTransition();
-    void EpsilonGreedy();
+    EpsilonGreedy();
     void GetEpsilon();
     void Learn();
 };

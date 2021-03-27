@@ -48,7 +48,8 @@ torch::Tensor SonnetLinearImpl::forward(torch::Tensor x) {
   };
 };
 
-MLPImpl::MLPImpl(const MLPConfig& config) {
+MLPImpl::MLPImpl(const MLPConfig& config) 
+    :loss_str_(config.loss_str) {
   int input_size = config.input_size;
   for (auto h_size: config.hidden_size) {
     SonnetLinear sonnet_linear(/*input_size*/input_size,
@@ -65,6 +66,19 @@ MLPImpl::MLPImpl(const MLPConfig& config) {
 
 torch::Tensor MLPImpl::forward(torch::Tensor x) {
   return this->forward_(x);
+}
+
+torch::Tensor MLPImpl::losses(torch::Tensor input, torch::Tensor target) {
+  if (loss_str_ == "mse") {
+    torch::nn::MSELoss loss;
+    torch::Tensor value_loss = loss(input, target);
+  } else if(loss_str_ == "huber") {
+    torch::nn::SmoothL1Loss loss;
+    torch::Tensor value_loss = loss(input, target);
+  } else {
+    SpielFatalError("Not implemented, choose from 'mse', 'huber'.");
+  };
+
 }
 
 }  // namespace torch_dqn
