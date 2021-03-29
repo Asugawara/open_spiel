@@ -36,26 +36,44 @@ DQN::DQN(std::shared_ptr<const Game> game, Player player_id, MLPConfig mlp_confi
       q_network_(MLP(mlp_config)),
       target_q_network_(MLP(mlp_config)),
       optimizer_(q_network_->parameters(), 
-                 torch::optim::AdamOptions(mlp_config.learning_rate)) {
+                 torch::optim::AdamOptions(mlp_config.learning_rate)),
+      step_counter_(0) {
   std::cout << q_network_ << std::endl;
 };
 
-Action DQN::Step(std::unique_ptr<State> state) {
-  if (state->IsTerminal()) {
-    return;
-  }
+Action DQN::Step(std::unique_ptr<State> state, bool is_evaluate) {
+  // if (state->IsTerminal()) {
+  //   return;
+  // }
   if (state->IsChanceNode()) {
     for (const auto& action_prob : state->ChanceOutcomes()) {
       state->ApplyAction(action_prob.first);
     }
   }
-  if (!state->IsTerminal() && state->CurrentPlayer() == player_id_) {
+  else if (state->CurrentPlayer() == player_id_) {
     std::vector<float> info_state = state->InformationStateTensor(player_id_);
     std::vector<Action> legal_actions = state->LegalActions(player_id_);
     // double epsilon = this->GetEpsilon(is_evaluation);
     // ActionsAndProbs action_prob = this->EpsilonGreedy(info_state, legal_actions, epsilon);
   }
   Action action;
+  if (!is_evaluate) {
+    step_counter_++;
+
+    if (step_counter_ % learn_every_ == 0) {
+      void last_loss_value = Learn()
+    };
+    if (step_counter_ % update_target_network_every_ == 0) {
+      torch::save(q_network_, 'q_network.pt');
+      torch::load(target_q_network_, 'q_network.pt');
+    };
+    if (prev_timestep && add_transition_record) {
+      AddTransition();
+    };
+    if 
+
+  }
+
   return action;
 };
   

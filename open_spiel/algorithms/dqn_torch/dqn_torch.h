@@ -47,7 +47,7 @@ class DQN {
   public: 
     DQN(std::shared_ptr<const Game> game, Player player_id, MLPConfig mlp_config);
     virtual ~DQN() = default;
-    Action Step(std::unique_ptr<State> state);
+    Action Step(std::unique_ptr<State> state, bool is_evaluate);
   protected:
     std::shared_ptr<const Game> game_;
   private:
@@ -56,6 +56,7 @@ class DQN {
     int learn_every_;
     int replay_buffer_capacity_;
     int batch_size_;
+    int step_counter_;
     MLP q_network_;
     MLP target_q_network_;
     torch::optim::Adam optimizer_;
