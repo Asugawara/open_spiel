@@ -92,7 +92,7 @@ class DQN {
     MLP q_network_;
     MLP target_q_network_;
     torch::optim::Adam optimizer_;
-    void AddTransition(std::unique_ptr<State> prev_state_, Action prev_action_, std::unique_ptr<State> state);
+    void AddTransition(const std::unique_ptr<State>& prev_state, Action prev_action, const std::unique_ptr<State>& state);
     double GetEpsilon(bool is_evaluation);
     ActionsAndProbs EpsilonGreedy(std::vector<float> info_state, std::vector<Action>, double epsilon);
     int Learn();

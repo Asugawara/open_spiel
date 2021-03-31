@@ -17,6 +17,7 @@
 #include <torch/torch.h>
 
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -106,9 +107,9 @@ Action DQN::Step(std::unique_ptr<State> state, bool is_evaluation, bool add_tran
       prev_action_=0;
       return;
     } else {
-      exists_prev_=true;
+      exists_prev_ = true;
       prev_state_ = state->Clone();
-      prev_action_=action;
+      prev_action_ = action;
     };
 
   };
@@ -116,7 +117,7 @@ Action DQN::Step(std::unique_ptr<State> state, bool is_evaluation, bool add_tran
   return action;
 };
   
-void DQN::AddTransition(std::unique_ptr<State> prev_state, Action prev_action, std::unique_ptr<State> state) {
+void DQN::AddTransition(const std::unique_ptr<State>& prev_state, Action prev_action, const std::unique_ptr<State>& state) {
   if (prev_state == nullptr) {
     SpielFatalError("prev_state_ doesn't exist");
   }
