@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OPEN_SPIEL_ALGORITHMS_SIMPLE_NETS_H_
-#define OPEN_SPIEL_ALGORITHMS_SIMPLE_NETS_H_
+#ifndef OPEN_SPIEL_ALGORITHMS_DQN_TORCH_SIMPLE_NETS_H_
+#define OPEN_SPIEL_ALGORITHMS_DQN_TORCH_SIMPLE_NETS_H_
 
 #include <torch/torch.h>
 
@@ -21,24 +21,13 @@
 #include <string>
 #include <vector>
 
-#include "open_spiel/policy.h"
+
 #include "open_spiel/spiel.h"
 
 namespace open_spiel {
 namespace algorithms {
 namespace torch_dqn {
 
-struct MLPConfig {
-  int input_size;
-  std::vector<int> hidden_size;
-  int output_size;
-  bool activate_final;
-  std::string loss_str;
-  double learning_rate;
-};
-
-std::istream& operator>>(std::istream& stream, MLPConfig& config);
-std::ostream& operator<<(std::ostream& stream, const MLPConfig& config);
 
 class SonnetLinearImpl : public torch::nn::Module {
   public :
@@ -53,12 +42,21 @@ TORCH_MODULE(SonnetLinear);
 
 class MLPImpl : public torch::nn::Module {
   public:
-    MLPImpl(const MLPConfig& config);
+    MLPImpl(int input_size,
+            std::vector<int> hidden_size,
+            int output_size,
+            bool activate_final=false,
+            std::string loss_str="mse");
     torch::Tensor forward(torch::Tensor x);
     torch::Tensor losses(torch::Tensor input, torch::Tensor target);
 
   private:
+    int input_size_;
+    std::vector<int> hidden_layers_sizes_;
+    int output_size_;
+    bool activate_final_;
     std::string loss_str_;
+    double learning_rate_;
     torch::Tensor forward_(torch::Tensor x);
     torch::nn::ModuleList layers_;
 
@@ -69,4 +67,4 @@ TORCH_MODULE(MLP);
 }  // namespace algorithms
 }  // namespace open_spiel
 
-#endif  // OPEN_SPIEL_ALGORITHMS_SIMPLE_NETS_H_
+#endif  // OPEN_SPIEL_ALGORITHMS_DQN_TORCH_SIMPLE_NETS_H_

@@ -34,12 +34,10 @@ namespace {
 void TestSimpleGame() {
   std::shared_ptr<const Game> game = efg_game::LoadEFGGame(efg_game::GetSampleEFGData());
   SPIEL_CHECK_TRUE(game != nullptr);
-  MLPConfig mlp_config = {};
-  DQN agent(game, 0, mlp_config);
-
+  DQN agent(0, game->ObservationTensorShape()[0], game->NumDistinctActions());
   std::unique_ptr<State> state = game->NewInitialState();
   for (int i=0;i<100;i++) {
-    Action action = agent.Step(game->NewInitialState());
+    Action action = agent.Step(game->NewInitialState(), true);
   }
 
   SPIEL_CHECK_TRUE(game != nullptr);

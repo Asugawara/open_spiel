@@ -22,16 +22,6 @@ namespace open_spiel {
 namespace algorithms {
 namespace torch_dqn {
 
-std::istream& operator>>(std::istream& stream, MLPConfig& config) {
-  stream >> config.input_size >> config.output_size;
-  return stream;
-};
-
-std::ostream& operator<<(std::ostream& stream, const MLPConfig& config) {
-  stream << config.input_size;
-  return stream;
-};
-
 SonnetLinearImpl::SonnetLinearImpl(int input_size, int output_size, bool activate_relu=false)
    : sonnet_linear(torch::nn::Linear(
      /*input_size*/input_size,
@@ -48,25 +38,32 @@ torch::Tensor SonnetLinearImpl::forward(torch::Tensor x) {
   };
 };
 
-MLPImpl::MLPImpl(const MLPConfig& config) 
-    :loss_str_(config.loss_str) {
-  int input_size = config.input_size;
-  for (auto h_size: config.hidden_size) {
-    SonnetLinear sonnet_linear(/*input_size*/input_size,
+MLPImpl::MLPImpl(int input_size,
+                 std::vector<int> hidden_layers_sizes,
+                 int output_size,
+                 bool activate_final,
+                 std::string loss_str) 
+    : input_size_(input_size),
+      hidden_layers_sizes_(hidden_layers_sizes),
+      output_size_(output_size_),
+      activate_final_(activate_final),
+      loss_str_(loss_str) {
+  for (auto h_size: hidden_layers_sizes_) {
+    SonnetLinear sonnet_linear(/*input_size*/input_size_,
                                /*output_size*/h_size);
     layers_->push_back(sonnet_linear);
-    input_size = h_size;
+    input_size_ = h_size;
   };
-  SonnetLinear sonnet_linear(/*input_size*/input_size,
-                            /*output_size*/config.output_size,
-                            /*activate_final*/config.activate_final);
+  SonnetLinear sonnet_linear(/*input_size*/input_size_,
+                            /*output_size*/output_size,
+                            /*activate_final*/activate_final);
   layers_->push_back(sonnet_linear);
   register_module("layers", layers_);
 };
 
 torch::Tensor MLPImpl::forward(torch::Tensor x) {
   return this->forward_(x);
-}
+};
 
 torch::Tensor MLPImpl::losses(torch::Tensor input, torch::Tensor target) {
   if (loss_str_ == "mse") {
@@ -79,7 +76,7 @@ torch::Tensor MLPImpl::losses(torch::Tensor input, torch::Tensor target) {
     SpielFatalError("Not implemented, choose from 'mse', 'huber'.");
   };
 
-}
+};
 
 }  // namespace torch_dqn
 }  // namespace algorithms

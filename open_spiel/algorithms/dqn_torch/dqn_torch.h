@@ -28,42 +28,74 @@
 #include "open_spiel/policy.h"
 #include "open_spiel/spiel.h"
 #include "open_spiel/spiel_utils.h"
+#include "open_spiel/utils/circular_buffer.h"
+
 
 namespace open_spiel {
 namespace algorithms {
 namespace torch_dqn {
 
 struct Transition {
-  int info_state;
-  int action;
-  int reward;
-  int next_info_state;
+  std::vector<float> info_state;
+  Action action;
+  double reward;
+  std::vector<float> next_info_state;
   bool is_final_step;
-  int legal_actions_mask;
+  std::vector<int> legal_actions_mask;
 };
 
 
 class DQN {
   public: 
-    DQN(std::shared_ptr<const Game> game, Player player_id, MLPConfig mlp_config);
+    DQN(Player player_id,
+        int state_representation_size,
+        int num_actions,
+        std::vector<int> hidden_layers_sizes={128},
+        int replay_buffer_capacity=10000,
+        int batch_size=128,
+        double learning_rate=0.01,
+        int update_target_network_every=1000,
+        int learn_every=10,
+        double discount_factor=1.0,
+        int min_buffer_size_to_learn=1000,
+        double epsilon_start=1.0,
+        double epsilon_end=0.1,
+        int epsilon_decay_duration=1000000,
+        std::string optimizer_str="sgd",
+        std::string loss_str="mse");
     virtual ~DQN() = default;
-    Action Step(std::unique_ptr<State> state, bool is_evaluate);
-  protected:
-    std::shared_ptr<const Game> game_;
+    Action Step(std::unique_ptr<State> state, bool is_evaluation=false, bool add_transition_record=true);
   private:
     int player_id_;
+    int num_actions_;
+    std::vector<int> hidden_layers_sizes_;
     int update_target_network_every_;
     int learn_every_;
-    int replay_buffer_capacity_;
+    int min_buffer_size_to_learn_;
+    int discount_factor_;
+    double epsilon_start_;
+    double epsilon_end_;
+    double epsilon_decay_duration_;
+    CircularBuffer<Transition> replay_buffer_;
     int batch_size_;
     int step_counter_;
+    int last_loss_value_;
+    bool exists_prev_;
+    std::unique_ptr<State> prev_state_;
+    Action prev_action_;
+    int setp_counter_;
+    int input_size_;
+    int output_size_;
+    // bool activate_final;
+    std::string loss_str;
+    double learning_rate_;
     MLP q_network_;
     MLP target_q_network_;
     torch::optim::Adam optimizer_;
-    void AddTransition();
-    ActionsAndProbs EpsilonGreedy();
-    double GetEpsilon();
-    void Learn();
+    void AddTransition(std::unique_ptr<State> prev_state_, Action prev_action_, std::unique_ptr<State> state);
+    double GetEpsilon(bool is_evaluation);
+    ActionsAndProbs EpsilonGreedy(std::vector<float> info_state, std::vector<Action>, double epsilon);
+    int Learn();
 };
 
 }  // namespace torch_dqn

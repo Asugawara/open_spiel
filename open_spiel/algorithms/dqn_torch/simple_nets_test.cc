@@ -34,17 +34,10 @@ void TestModelCreation() {
 
   std::shared_ptr<const Game> game = LoadGame("clobber");
 
-  for (auto e: game->ObservationTensorShape()) {
-    std::cout<<e<<std::endl;
-  }
-
-  MLPConfig mlp_config = {
-      /*input_size=*/game->ObservationTensorShape()[0],
-      /*hidden_size=*/{128,128},
-      /*output_size=*/game->NumDistinctActions()};
-  MLP mlp(mlp_config);
-
-  std::cout << "The network:\n" << mlp << std::endl;
+  MLPImpl mlp(/*input_size=*/game->ObservationTensorSize(),
+              /*hidden_size=*/{128,128},
+              /*output_size=*/game->NumDistinctActions(),
+              /*activate_final*/true);
 };
 
 }
