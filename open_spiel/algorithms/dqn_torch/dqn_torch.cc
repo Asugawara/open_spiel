@@ -20,7 +20,9 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <algorithm>
 
+#include "open_spiel/abseil-cpp/absl/random/random.h"
 #include "open_spiel/policy.h"
 #include "open_spiel/spiel.h"
 
@@ -130,6 +132,34 @@ void DQN::AddTransition(const std::unique_ptr<State>& prev_state, Action prev_ac
     /*is_final_step=*/state->IsTerminal(),
     /*legal_actions_mask=*/legal_actions_mask};
   replay_buffer_.Add(transition); 
+};
+
+ActionsAndProbs DQN::EpsilonGreedy(std::vector<float> info_state, std::vector<Action> legal_actions, double epsilon, int seed) {
+  ActionsAndProbs actions_probs;
+  Action action;
+  if (absl::Uniform(rng_, 0.0, 1.0) < epsilon) {
+    std::vector<double> probs(legal_actions.size(), 1/legal_actions.size());
+    for (int i;i<legal_actions.size();i++){
+      actions_probs.push_back({legal_actions[i], probs[i]});
+    };
+    action = SampleAction(actions_probs, rng_).first;
+  } else {
+
+  };
+  return actions_probs;
+} ;
+
+double DQN::GetEpsilon(bool is_evaluation, int power) {
+  if (is_evaluation) {
+    return 0.0;
+  };
+
+  double decay_steps = std::min((double)step_counter_, epsilon_decay_duration_);
+  double decayed_epsilon = (
+    epsilon_end_ + (epsilon_start_ - epsilon_end_) *
+    std::pow((1 - decay_steps / epsilon_decay_duration_), power)
+  );
+  return decayed_epsilon;
 };
 
 }  // namespace torch_dqn

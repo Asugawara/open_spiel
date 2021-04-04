@@ -21,9 +21,8 @@
 #include <random>
 #include <vector>
 
-#include "open_spiel/abseil-cpp/absl/random/distributions.h"
-#include "open_spiel/abseil-cpp/absl/strings/string_view.h"
-#include "open_spiel/abseil-cpp/absl/types/optional.h"
+
+#include "open_spiel/abseil-cpp/absl/random/random.h"
 #include "open_spiel/algorithms/dqn_torch/simple_nets.h"
 #include "open_spiel/policy.h"
 #include "open_spiel/spiel.h"
@@ -92,9 +91,10 @@ class DQN {
     MLP q_network_;
     MLP target_q_network_;
     torch::optim::Adam optimizer_;
+    std::mt19937 rng_;
     void AddTransition(const std::unique_ptr<State>& prev_state, Action prev_action, const std::unique_ptr<State>& state);
-    double GetEpsilon(bool is_evaluation);
-    ActionsAndProbs EpsilonGreedy(std::vector<float> info_state, std::vector<Action>, double epsilon);
+    ActionsAndProbs EpsilonGreedy(std::vector<float> info_state, std::vector<Action> legal_actions, double epsilon, int seed);
+    double GetEpsilon(bool is_evaluation, int power=1.0);
     int Learn();
 };
 
