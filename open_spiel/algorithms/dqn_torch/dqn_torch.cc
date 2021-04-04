@@ -83,8 +83,7 @@ Action DQN::Step(std::unique_ptr<State> state, bool is_evaluation, bool add_tran
     std::vector<float> info_state = state->InformationStateTensor(player_id_);
     std::vector<Action> legal_actions = state->LegalActions(player_id_);
     double epsilon = this->GetEpsilon(is_evaluation);
-    ActionsAndProbs action_prob = this->EpsilonGreedy(info_state, legal_actions, epsilon);
-    action = action_prob[0].first;
+    action = this->EpsilonGreedy(info_state, legal_actions, epsilon);
     std::vector<double> probs;
   } else {
     action = 0;
@@ -95,7 +94,7 @@ Action DQN::Step(std::unique_ptr<State> state, bool is_evaluation, bool add_tran
     step_counter_++;
 
     if (step_counter_ % learn_every_ == 0) {
-      int last_loss_value = Learn();
+      this->Learn();
     };
     if (step_counter_ % update_target_network_every_ == 0) {
       torch::save(q_network_, "q_network.pt");
@@ -134,19 +133,19 @@ void DQN::AddTransition(const std::unique_ptr<State>& prev_state, Action prev_ac
   replay_buffer_.Add(transition); 
 };
 
-ActionsAndProbs DQN::EpsilonGreedy(std::vector<float> info_state, std::vector<Action> legal_actions, double epsilon, int seed) {
-  ActionsAndProbs actions_probs;
-  Action action;
+Action DQN::EpsilonGreedy(std::vector<float> info_state, std::vector<Action> legal_actions, double epsilon) {
   if (absl::Uniform(rng_, 0.0, 1.0) < epsilon) {
     std::vector<double> probs(legal_actions.size(), 1/legal_actions.size());
     for (int i;i<legal_actions.size();i++){
-      actions_probs.push_back({legal_actions[i], probs[i]});
+      actions_probs_.push_back({legal_actions[i], probs[i]});
     };
-    action = SampleAction(actions_probs, rng_).first;
+    action_ = SampleAction(actions_probs_, rng_).first;
   } else {
-
+    torch::Tensor info_state_tensor = torch::from_blob(info_state.data(), info_state.size());
+    torch::Tensor q_value = q_network_->forward(info_state_tensor);
+    action_ = q_value.argmax(1).item().toInt();
   };
-  return actions_probs;
+  return action_;
 } ;
 
 double DQN::GetEpsilon(bool is_evaluation, int power) {
@@ -160,6 +159,20 @@ double DQN::GetEpsilon(bool is_evaluation, int power) {
     std::pow((1 - decay_steps / epsilon_decay_duration_), power)
   );
   return decayed_epsilon;
+};
+
+void DQN::Learn() {
+  if (replay_buffer_.Size() < batch_size_) return;
+  if (replay_buffer_.Size() < min_buffer_size_to_learn_) return;
+
+  std::vector<Transition> transition = replay_buffer_.Sample(&rng_, batch_size_);
+  std::vector<std::vector<float>> info_states;
+  for (auto t: transition) {
+    info_states.push_back(t.info_state);
+  }
+  torch::Tensor info_states_tensor = torch::from_blob(info_states.data(), {batch_size_, info_states[0].size()});
+
+
 };
 
 }  // namespace torch_dqn
