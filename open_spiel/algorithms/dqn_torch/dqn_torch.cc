@@ -30,7 +30,7 @@ namespace open_spiel {
 namespace algorithms {
 namespace torch_dqn {
 
-// CircularBuffer<hogehoge> replay_buffer(replay_buffer_size);
+constexpr const int kIllegalActionLogitsPenalty = -1e9;
 
 DQN::DQN(Player player_id,
          int state_representation_size,
@@ -167,11 +167,32 @@ void DQN::Learn() {
 
   std::vector<Transition> transition = replay_buffer_.Sample(&rng_, batch_size_);
   std::vector<std::vector<float>> info_states;
+  std::vector<int> actions;
+  std::vector<float> rewards;
+  std::vector<std::vector<float>> next_info_states;
+  std::vector<int> are_final_steps;
+  std::vector<std::vector<int>> legal_actions_mask;
   for (auto t: transition) {
     info_states.push_back(t.info_state);
+    actions.push_back(t.action);
+    rewards.push_back(t.reward);
+    next_info_states.push_back(t.next_info_state);
+    are_final_steps.push_back(t.is_final_step);
+    legal_actions_mask.push_back(t.legal_actions_mask);
   }
   torch::Tensor info_states_tensor = torch::from_blob(info_states.data(), {batch_size_, info_states[0].size()});
-
+  torch::Tensor next_info_states_tensor = torch::from_blob(next_info_states.data(), {batch_size_, next_info_states[0].size()});
+  torch::Tensor q_values = q_network_->forward(info_states_tensor);
+  torch::Tensor target_q_values = target_q_network_->forward(next_info_states_tensor);
+  torch::Tensor illegal_actions = torch::sub(
+      torch::from_blob(legal_actions_mask.data(), {batch_size_, legal_actions_mask[0].size()}), 1);
+  torch::Tensor illegal_logits = torch::mul(illegal_actions, -1 * kIllegalActionLogitsPenalty);
+  torch::Tensor max_next_q = torch::max(
+      torch::add(target_q_values, illegal_logits));
+  torch::Tensor are_final_steps_tensor = torch::from_blob(are_final_steps.data(), {batch_size_, 1});
+  torch::Tensor rewards_tensor = torch::from_blob(rewards.data(), {batch_size_, 1});
+  torch::Tensor target = torch::sub(
+      rewards_tensor, torch::mul(torch::sub(are_final_steps_tensor, 1), torch::mul(max_next_q, discount_factor_)));
 
 };
 
