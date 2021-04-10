@@ -22,23 +22,23 @@ namespace open_spiel {
 namespace algorithms {
 namespace torch_dqn {
 
-SonnetLinearImpl::SonnetLinearImpl(int input_size, int output_size, bool activate_relu=false)
-   : sonnet_linear(torch::nn::Linear(
-     /*input_size*/input_size,
-     /*output_size*/output_size)) {
-  activate_relu_ = activate_relu;
-  register_module("sonnet_linear", sonnet_linear);
+SonnetLinearImpl::SonnetLinearImpl(const int& input_size, const int& output_size, bool activate_relu=false)
+   : sonnet_linear_(torch::nn::LinearOptions(
+     /*in_features*/input_size,
+     /*out_features*/output_size)),
+     activate_relu_(activate_relu) {
+  register_module("sonnet_linear", sonnet_linear_);
 };
 
 torch::Tensor SonnetLinearImpl::forward(torch::Tensor x) {
   if (activate_relu_) {
-    return torch::relu(sonnet_linear(x));
+    return torch::relu(sonnet_linear_(x));
   } else {
-    return sonnet_linear(x);
+    return sonnet_linear_(x);
   };
 };
 
-MLPImpl::MLPImpl(int input_size,
+MLPImpl::MLPImpl(const int& input_size,
                  std::vector<int> hidden_layers_sizes,
                  int output_size,
                  bool activate_final,
@@ -48,35 +48,27 @@ MLPImpl::MLPImpl(int input_size,
       output_size_(output_size_),
       activate_final_(activate_final),
       loss_str_(loss_str) {
+  int layer_size = input_size_;
   for (auto h_size: hidden_layers_sizes_) {
-    SonnetLinear sonnet_linear(/*input_size*/input_size_,
-                               /*output_size*/h_size);
-    layers_->push_back(sonnet_linear);
-    input_size_ = h_size;
+    std::cout << layer_size << std::endl;
+    layers_->push_back(SonnetLinear(/*input_size*/layer_size,
+                                    /*output_size*/h_size));
+    layer_size = h_size;
+    std::cout << layer_size << std::endl;
   };
-  SonnetLinear sonnet_linear(/*input_size*/input_size_,
-                            /*output_size*/output_size,
-                            /*activate_final*/activate_final);
-  layers_->push_back(sonnet_linear);
+  layers_->push_back(SonnetLinear(/*input_size*/input_size_,
+                                  /*output_size*/output_size,
+                                  /*activate_final*/activate_final));
   register_module("layers", layers_);
 };
 
 torch::Tensor MLPImpl::forward(torch::Tensor x) {
-  return this->forward_(x);
+  for (int i;i<hidden_layers_sizes_.size() + 1;i++) {
+    x = layers_[i]->as<SonnetLinear>()->forward(x);
+  }
+  return x;
 };
 
-torch::Tensor MLPImpl::losses(torch::Tensor input, torch::Tensor target) {
-  if (loss_str_ == "mse") {
-    torch::nn::MSELoss loss;
-    torch::Tensor value_loss = loss(input, target);
-  } else if(loss_str_ == "huber") {
-    torch::nn::SmoothL1Loss loss;
-    torch::Tensor value_loss = loss(input, target);
-  } else {
-    SpielFatalError("Not implemented, choose from 'mse', 'huber'.");
-  };
-
-};
 
 }  // namespace torch_dqn
 }  // namespace algorithms

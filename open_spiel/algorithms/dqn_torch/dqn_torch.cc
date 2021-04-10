@@ -26,6 +26,7 @@
 #include "open_spiel/policy.h"
 #include "open_spiel/spiel.h"
 
+
 namespace open_spiel {
 namespace algorithms {
 namespace torch_dqn {
@@ -61,19 +62,19 @@ DQN::DQN(Player player_id,
       epsilon_end_(epsilon_end_),
       epsilon_decay_duration_(epsilon_decay_duration),
       replay_buffer_(replay_buffer_capacity),
-      q_network_(input_size_, hidden_layers_sizes_, output_size_),
-      target_q_network_(input_size_, hidden_layers_sizes_, output_size_),
+      q_network_(input_size_, hidden_layers_sizes_, num_actions_),
+      target_q_network_(input_size_, hidden_layers_sizes_, num_actions_),
       optimizer_(q_network_->parameters(), torch::optim::AdamOptions(learning_rate_)),
+      loss_str_(loss_str),
       exists_prev_(false),
       prev_state_(nullptr),
       step_counter_(0) {
+        std::cout<<"construct"<<input_size_<<std::endl;
 };
 
-Action DQN::Step(std::unique_ptr<State> state, bool is_evaluation, bool add_transition_record) {
-  // if (state->IsTerminal()) {
-  //   return;
-  // }
+Action DQN::Step(const std::unique_ptr<State>& state, bool is_evaluation, bool add_transition_record) {
   Action action;
+  std::cout << "start step" << std::endl;
   if (state->IsChanceNode()) {
     for (const auto& action_prob : state->ChanceOutcomes()) {
       state->ApplyAction(action_prob.first);
@@ -89,7 +90,7 @@ Action DQN::Step(std::unique_ptr<State> state, bool is_evaluation, bool add_tran
     action = 0;
     std::vector<double> probs;
   }
-  
+
   if (!is_evaluation) {
     step_counter_++;
 
@@ -134,18 +135,25 @@ void DQN::AddTransition(const std::unique_ptr<State>& prev_state, Action prev_ac
 };
 
 Action DQN::EpsilonGreedy(std::vector<float> info_state, std::vector<Action> legal_actions, double epsilon) {
+  std::cout<<"start epsilon greedy" << std::endl;
+  Action action;
+  ActionsAndProbs actions_probs;
   if (absl::Uniform(rng_, 0.0, 1.0) < epsilon) {
-    std::vector<double> probs(legal_actions.size(), 1/legal_actions.size());
-    for (int i;i<legal_actions.size();i++){
-      actions_probs_.push_back({legal_actions[i], probs[i]});
+    std::cout<<"calcurate probs" << std::endl;
+    std::vector<double> probs(legal_actions.size(), 1.0/legal_actions.size());
+    for (int i=0;i<legal_actions.size();i++){
+      actions_probs.push_back({legal_actions[i], probs[i]});
     };
-    action_ = SampleAction(actions_probs_, rng_).first;
+    std::cout<<"end push back" << std::endl;
+    action = SampleAction(actions_probs, rng_).first;
+    std::cout<<"action" << SampleAction(actions_probs, rng_).first << std::endl;
   } else {
-    torch::Tensor info_state_tensor = torch::from_blob(info_state.data(), info_state.size());
+    torch::Tensor info_state_tensor = torch::from_blob(info_state.data(), info_state.size()).view({1, -1});
     torch::Tensor q_value = q_network_->forward(info_state_tensor);
-    action_ = q_value.argmax(1).item().toInt();
+    action = q_value.argmax(1).item().toInt();
   };
-  return action_;
+  std::cout<<"end epsilon greedy" << std::endl;
+  return action;
 } ;
 
 double DQN::GetEpsilon(bool is_evaluation, int power) {
@@ -162,12 +170,12 @@ double DQN::GetEpsilon(bool is_evaluation, int power) {
 };
 
 void DQN::Learn() {
-  if (replay_buffer_.Size() < batch_size_) return;
-  if (replay_buffer_.Size() < min_buffer_size_to_learn_) return;
-
+  std::cout << "replay buffer size:" << replay_buffer_.Size() << std::endl;
+  if (replay_buffer_.Size() < batch_size_ || replay_buffer_.Size() < min_buffer_size_to_learn_) return;
+  std::cout << "start learn" << std::endl;
   std::vector<Transition> transition = replay_buffer_.Sample(&rng_, batch_size_);
   std::vector<std::vector<float>> info_states;
-  std::vector<int> actions;
+  std::vector<long long> actions;
   std::vector<float> rewards;
   std::vector<std::vector<float>> next_info_states;
   std::vector<int> are_final_steps;
@@ -180,6 +188,7 @@ void DQN::Learn() {
     are_final_steps.push_back(t.is_final_step);
     legal_actions_mask.push_back(t.legal_actions_mask);
   }
+  std::cout << "to vector done" << std::endl;
   torch::Tensor info_states_tensor = torch::from_blob(info_states.data(), {batch_size_, info_states[0].size()});
   torch::Tensor next_info_states_tensor = torch::from_blob(next_info_states.data(), {batch_size_, next_info_states[0].size()});
   torch::Tensor q_values = q_network_->forward(info_states_tensor);
@@ -187,12 +196,29 @@ void DQN::Learn() {
   torch::Tensor illegal_actions = torch::sub(
       torch::from_blob(legal_actions_mask.data(), {batch_size_, legal_actions_mask[0].size()}), 1);
   torch::Tensor illegal_logits = torch::mul(illegal_actions, -1 * kIllegalActionLogitsPenalty);
+  std::cout << "before add" << std::endl;
   torch::Tensor max_next_q = torch::max(
       torch::add(target_q_values, illegal_logits));
   torch::Tensor are_final_steps_tensor = torch::from_blob(are_final_steps.data(), {batch_size_, 1});
   torch::Tensor rewards_tensor = torch::from_blob(rewards.data(), {batch_size_, 1});
   torch::Tensor target = torch::sub(
       rewards_tensor, torch::mul(torch::sub(are_final_steps_tensor, 1), torch::mul(max_next_q, discount_factor_)));
+  torch::Tensor actions_tensor = torch::from_blob(actions.data(), {batch_size_}, torch::TensorOptions().dtype(torch::kInt64));
+
+  torch::Tensor predictions = q_values.index({torch::arange(q_values.size(0)), actions_tensor}).unsqueeze(1);
+  torch::Tensor value_loss;
+  if (loss_str_ == "mse") {
+    torch::nn::MSELoss loss;
+    value_loss = loss(predictions, target);
+  } else if(loss_str_ == "huber") {
+    torch::nn::SmoothL1Loss loss;
+    value_loss = loss(predictions, target);
+  } else {
+    SpielFatalError("Not implemented, choose from 'mse', 'huber'.");
+  };
+  optimizer_.zero_grad();
+  value_loss.backward();
+  optimizer_.step();
 
 };
 

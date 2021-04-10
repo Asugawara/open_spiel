@@ -63,7 +63,7 @@ class DQN {
         std::string optimizer_str="sgd",
         std::string loss_str="mse");
     virtual ~DQN() = default;
-    Action Step(std::unique_ptr<State> state, bool is_evaluation=false, bool add_transition_record=true);
+    Action Step(const std::unique_ptr<State>& state, bool is_evaluation=false, bool add_transition_record=true);
   private:
     int player_id_;
     int num_actions_;
@@ -84,9 +84,8 @@ class DQN {
     Action prev_action_;
     int setp_counter_;
     int input_size_;
-    int output_size_;
     // bool activate_final;
-    std::string loss_str;
+    std::string loss_str_;
     double learning_rate_;
     MLP q_network_;
     MLP target_q_network_;

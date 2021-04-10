@@ -31,24 +31,23 @@ namespace torch_dqn {
 
 class SonnetLinearImpl : public torch::nn::Module {
   public :
-    SonnetLinearImpl(int input_size, int output_size, bool activate_relu);
+    SonnetLinearImpl(const int& input_size, const int& output_size, bool activate_relu);
     torch::Tensor forward(torch::Tensor x);
   
   private:
     bool activate_relu_;
-    torch::nn::Linear sonnet_linear;
+    torch::nn::Linear sonnet_linear_;
 };
 TORCH_MODULE(SonnetLinear);
 
 class MLPImpl : public torch::nn::Module {
   public:
-    MLPImpl(int input_size,
+    MLPImpl(const int& input_size,
             std::vector<int> hidden_size,
             int output_size,
             bool activate_final=false,
             std::string loss_str="mse");
     torch::Tensor forward(torch::Tensor x);
-    torch::Tensor losses(torch::Tensor input, torch::Tensor target);
 
   private:
     int input_size_;

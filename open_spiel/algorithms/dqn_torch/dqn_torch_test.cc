@@ -32,15 +32,36 @@ namespace torch_dqn {
 namespace {
 
 void TestSimpleGame() {
-  std::shared_ptr<const Game> game = efg_game::LoadEFGGame(efg_game::GetSampleEFGData());
+  std::shared_ptr<const Game> game = efg_game::LoadEFGGame(efg_game::GetSimpleForkEFGData());
   SPIEL_CHECK_TRUE(game != nullptr);
-  DQN agent(0, game->ObservationTensorShape()[0], game->NumDistinctActions());
+  DQN dqn(/*player_id*/0,
+          /*state_representation_size*/game->InformationStateTensorSize(),
+          /*num_actions*/game->NumDistinctActions(),
+          /*hidden_layers_sizes*/{16},
+          /*replay_buffer_capacity*/100,
+          /*batch_size*/5,
+          /*learning_rate*/0.01,
+          /*update_target_network_every*/20,
+          /*learn_every*/10,
+          /*discount_factor*/1.0,
+          /*min_buffer_size_to_learn*/5,
+          /*epsilon_start*/0.02,
+          /*epsilon_end*/0.01);
   std::unique_ptr<State> state = game->NewInitialState();
+  int total_reward = 0;
   for (int i=0;i<100;i++) {
-    Action action = agent.Step(game->NewInitialState(), true);
-  }
+    std::cout << "Episode: " << i << std::endl;
+    std::cout << "total_reward: " << total_reward << std::endl;
+    std::unique_ptr<open_spiel::State> state = game->NewInitialState();
+    while (!state->IsTerminal()) {
+      open_spiel::Action action = dqn.Step(state);
+      std::cout << "action: " << action << std::endl;
+      state->ApplyAction(action);
+      total_reward += state->Rewards()[0];
+    };
+  };
 
-  SPIEL_CHECK_TRUE(game != nullptr);
+  SPIEL_CHECK_GE(total_reward, 75);
 
 }
   
