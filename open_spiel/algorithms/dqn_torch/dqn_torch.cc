@@ -127,7 +127,7 @@ void DQN::AddTransition(const std::unique_ptr<State>& prev_state, Action prev_ac
   Transition transition = {
     /*info_state=*/prev_state->InformationStateTensor(player_id_),
     /*action=*/prev_action_,
-    /*reward=*/state->PlayerReward(player_id_),
+    /*reward=*/state->Rewards()[player_id_],
     /*next_info_state=*/state->InformationStateTensor(player_id_),
     /*is_final_step=*/state->IsTerminal(),
     /*legal_actions_mask=*/legal_actions_mask};
@@ -139,18 +139,17 @@ Action DQN::EpsilonGreedy(std::vector<float> info_state, std::vector<Action> leg
   Action action;
   ActionsAndProbs actions_probs;
   if (absl::Uniform(rng_, 0.0, 1.0) < epsilon) {
-    std::cout<<"calcurate probs" << std::endl;
     std::vector<double> probs(legal_actions.size(), 1.0/legal_actions.size());
     for (int i=0;i<legal_actions.size();i++){
       actions_probs.push_back({legal_actions[i], probs[i]});
     };
-    std::cout<<"end push back" << std::endl;
     action = SampleAction(actions_probs, rng_).first;
-    std::cout<<"action" << SampleAction(actions_probs, rng_).first << std::endl;
+    std::cout<<"sample action" << SampleAction(actions_probs, rng_).first << std::endl;
   } else {
     torch::Tensor info_state_tensor = torch::from_blob(info_state.data(), info_state.size()).view({1, -1});
     torch::Tensor q_value = q_network_->forward(info_state_tensor);
-    action = q_value.argmax(1).item().toInt();
+    // std::cout << info_state_tensor << q_network_->forward(info_state_tensor) << q_value << std::endl;
+    action = q_value.detach().argmax(1).item().toInt();
   };
   std::cout<<"end epsilon greedy" << std::endl;
   return action;
@@ -201,8 +200,10 @@ void DQN::Learn() {
       torch::add(target_q_values, illegal_logits));
   torch::Tensor are_final_steps_tensor = torch::from_blob(are_final_steps.data(), {batch_size_, 1});
   torch::Tensor rewards_tensor = torch::from_blob(rewards.data(), {batch_size_, 1});
+  std::cout << "rewards:" << rewards_tensor << std::endl;
   torch::Tensor target = torch::sub(
       rewards_tensor, torch::mul(torch::sub(are_final_steps_tensor, 1), torch::mul(max_next_q, discount_factor_)));
+  std::cout << "target:" << target << std::endl;
   torch::Tensor actions_tensor = torch::from_blob(actions.data(), {batch_size_}, torch::TensorOptions().dtype(torch::kInt64));
 
   torch::Tensor predictions = q_values.index({torch::arange(q_values.size(0)), actions_tensor}).unsqueeze(1);
