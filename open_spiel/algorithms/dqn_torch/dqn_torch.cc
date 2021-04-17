@@ -33,7 +33,8 @@ namespace torch_dqn {
 
 constexpr const int kIllegalActionLogitsPenalty = -1e9;
 
-DQN::DQN(Player player_id,
+DQN::DQN(bool use_observation,
+         Player player_id,
          int state_representation_size,
          int num_actions,
          std::vector<int> hidden_layers_sizes,
@@ -49,7 +50,8 @@ DQN::DQN(Player player_id,
          int epsilon_decay_duration,
          std::string optimizer_str,
          std::string loss_str)
-    : player_id_(player_id),
+    : use_observation_(use_observation),
+      player_id_(player_id),
       input_size_(state_representation_size),
       num_actions_(num_actions),
       hidden_layers_sizes_(hidden_layers_sizes),
@@ -69,7 +71,14 @@ DQN::DQN(Player player_id,
       exists_prev_(false),
       prev_state_(nullptr),
       step_counter_(0) {
-        std::cout<<"construct"<<input_size_<<std::endl;
+};
+
+std::vector<float> DQN::GetInfoState(const std::unique_ptr<State>& state, Player player_id, bool use_observation) {
+  if (use_observation){
+    return state->ObservationTensor(player_id);
+  } else {
+    return state->InformationStateTensor(player_id);
+  };
 };
 
 Action DQN::Step(const std::unique_ptr<State>& state, bool is_evaluation, bool add_transition_record) {
@@ -81,7 +90,8 @@ Action DQN::Step(const std::unique_ptr<State>& state, bool is_evaluation, bool a
     }
   }
   if (!state->IsTerminal() && state->CurrentPlayer() == player_id_) {
-    std::vector<float> info_state = state->InformationStateTensor(player_id_);
+    std::cout << state->IsTerminal() << ':' << state->CurrentPlayer() << std::endl;
+    std::vector<float> info_state = GetInfoState(state, player_id_, use_observation_);
     std::vector<Action> legal_actions = state->LegalActions(player_id_);
     double epsilon = this->GetEpsilon(is_evaluation);
     action = this->EpsilonGreedy(info_state, legal_actions, epsilon);
@@ -125,10 +135,10 @@ void DQN::AddTransition(const std::unique_ptr<State>& prev_state, Action prev_ac
   }
   std::vector<int> legal_actions_mask = state->LegalActionsMask(player_id_);
   Transition transition = {
-    /*info_state=*/prev_state->InformationStateTensor(player_id_),
+    /*info_state=*/GetInfoState(prev_state, player_id_, use_observation_),
     /*action=*/prev_action_,
-    /*reward=*/state->Rewards()[player_id_],
-    /*next_info_state=*/state->InformationStateTensor(player_id_),
+    /*reward=*/state->PlayerReward(player_id_),
+    /*next_info_state=*/GetInfoState(state, player_id_, use_observation_),
     /*is_final_step=*/state->IsTerminal(),
     /*legal_actions_mask=*/legal_actions_mask};
   replay_buffer_.Add(transition); 
@@ -146,10 +156,14 @@ Action DQN::EpsilonGreedy(std::vector<float> info_state, std::vector<Action> leg
     action = SampleAction(actions_probs, rng_).first;
     std::cout<<"sample action" << SampleAction(actions_probs, rng_).first << std::endl;
   } else {
-    torch::Tensor info_state_tensor = torch::from_blob(info_state.data(), info_state.size()).view({1, -1});
+    torch::Tensor info_state_tensor = torch::from_blob(info_state.data(), {info_state.size()}).view({1, -1});
     torch::Tensor q_value = q_network_->forward(info_state_tensor);
-    // std::cout << info_state_tensor << q_network_->forward(info_state_tensor) << q_value << std::endl;
-    action = q_value.detach().argmax(1).item().toInt();
+    for (auto e: legal_actions){
+      std::cout << e << std::endl;
+    };
+    torch::Tensor legal_actions_tensor = torch::from_blob(legal_actions.data(), {legal_actions.size()}, torch::TensorOptions().dtype(torch::kInt64));
+    std::cout << legal_actions_tensor << q_network_->forward(info_state_tensor) << q_value << std::endl;
+    action = torch::mul(q_value.detach(), legal_actions_tensor).argmax(1).item().toInt();
   };
   std::cout<<"end epsilon greedy" << std::endl;
   return action;
@@ -173,40 +187,48 @@ void DQN::Learn() {
   if (replay_buffer_.Size() < batch_size_ || replay_buffer_.Size() < min_buffer_size_to_learn_) return;
   std::cout << "start learn" << std::endl;
   std::vector<Transition> transition = replay_buffer_.Sample(&rng_, batch_size_);
-  std::vector<std::vector<float>> info_states;
-  std::vector<long long> actions;
+  std::vector<torch::Tensor> info_states;
+  std::vector<torch::Tensor> next_info_states;
+  std::vector<torch::Tensor> legal_actions_mask;
+  std::vector<Action> actions;
   std::vector<float> rewards;
-  std::vector<std::vector<float>> next_info_states;
   std::vector<int> are_final_steps;
-  std::vector<std::vector<int>> legal_actions_mask;
   for (auto t: transition) {
-    info_states.push_back(t.info_state);
+    info_states.push_back(
+        torch::from_blob(t.info_state.data(), {1, t.info_state.size()}, torch::TensorOptions().dtype(torch::kFloat32)).clone());
+    next_info_states.push_back(
+        torch::from_blob(t.next_info_state.data(), {1, t.next_info_state.size()}, torch::TensorOptions().dtype(torch::kFloat)).clone());
+    legal_actions_mask.push_back(
+        torch::from_blob(t.legal_actions_mask.data(), {1, t.legal_actions_mask.size()}, torch::TensorOptions().dtype(torch::kInt32)).to(torch::kInt64).clone());
     actions.push_back(t.action);
     rewards.push_back(t.reward);
-    next_info_states.push_back(t.next_info_state);
-    are_final_steps.push_back(t.is_final_step);
-    legal_actions_mask.push_back(t.legal_actions_mask);
+    are_final_steps.push_back(t.is_final_step);    
   }
   std::cout << "to vector done" << std::endl;
-  torch::Tensor info_states_tensor = torch::from_blob(info_states.data(), {batch_size_, info_states[0].size()});
-  torch::Tensor next_info_states_tensor = torch::from_blob(next_info_states.data(), {batch_size_, next_info_states[0].size()});
+  torch::Tensor info_states_tensor = torch::cat(torch::TensorList(info_states), 0);
+  torch::Tensor next_info_states_tensor = torch::cat(torch::TensorList(next_info_states), 0);
   torch::Tensor q_values = q_network_->forward(info_states_tensor);
   torch::Tensor target_q_values = target_q_network_->forward(next_info_states_tensor);
-  torch::Tensor illegal_actions = torch::sub(
-      torch::from_blob(legal_actions_mask.data(), {batch_size_, legal_actions_mask[0].size()}), 1);
+  std::cout << info_states_tensor << std::endl;
+  std::cout << torch::TensorList(legal_actions_mask) << std::endl;
+  torch::Tensor legal_action_masks_tensor = torch::cat(torch::TensorList(legal_actions_mask));
+  std::cout << legal_action_masks_tensor << std::endl;
+  torch::Tensor illegal_actions = torch::sub(legal_action_masks_tensor, 1);
+  std::cout << illegal_actions << std::endl;
   torch::Tensor illegal_logits = torch::mul(illegal_actions, -1 * kIllegalActionLogitsPenalty);
   std::cout << "before add" << std::endl;
-  torch::Tensor max_next_q = torch::max(
-      torch::add(target_q_values, illegal_logits));
-  torch::Tensor are_final_steps_tensor = torch::from_blob(are_final_steps.data(), {batch_size_, 1});
-  torch::Tensor rewards_tensor = torch::from_blob(rewards.data(), {batch_size_, 1});
-  std::cout << "rewards:" << rewards_tensor << std::endl;
+  torch::Tensor max_next_q = std::get<0>(torch::max(
+      torch::add(target_q_values, illegal_logits), 1));
+  torch::Tensor are_final_steps_tensor = torch::from_blob(are_final_steps.data(), {batch_size_}, torch::TensorOptions().dtype(torch::kInt32));
+  torch::Tensor rewards_tensor = torch::from_blob(rewards.data(), {batch_size_});
   torch::Tensor target = torch::sub(
       rewards_tensor, torch::mul(torch::sub(are_final_steps_tensor, 1), torch::mul(max_next_q, discount_factor_)));
-  std::cout << "target:" << target << std::endl;
+  // std::cout << "sub:" << torch::sub(are_final_steps_tensor, 1) << std::endl;
+  // std::cout << "mul:" << torch::mul(max_next_q, discount_factor_) << std::endl;
   torch::Tensor actions_tensor = torch::from_blob(actions.data(), {batch_size_}, torch::TensorOptions().dtype(torch::kInt64));
-
-  torch::Tensor predictions = q_values.index({torch::arange(q_values.size(0)), actions_tensor}).unsqueeze(1);
+  torch::Tensor predictions = q_values.index({torch::arange(q_values.size(0)), actions_tensor});
+  std::cout << q_values << predictions << target << std::endl;
+  std::cout << "rewards:" << rewards_tensor << std::endl;
   torch::Tensor value_loss;
   if (loss_str_ == "mse") {
     torch::nn::MSELoss loss;

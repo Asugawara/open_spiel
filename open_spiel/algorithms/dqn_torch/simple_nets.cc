@@ -31,6 +31,7 @@ SonnetLinearImpl::SonnetLinearImpl(const int& input_size, const int& output_size
   double mean = 0;
   double lower = (-2 * stddev - mean) / stddev;
   double upper = (2 * stddev - mean) / stddev;
+  std::cout << sonnet_linear_ << std::endl;
   for (auto& named_parameter : sonnet_linear_->named_parameters()) {
     if (named_parameter.key().find("weight") != std::string::npos) {
       named_parameter.value().data() = torch::nn::functional::normalize(named_parameter.value().data());
@@ -70,18 +71,16 @@ MLPImpl::MLPImpl(const int& input_size,
     layer_size = h_size;
     std::cout << layer_size << std::endl;
   };
-  layers_->push_back(SonnetLinear(/*input_size*/input_size_,
+  layers_->push_back(SonnetLinear(/*input_size*/layer_size,
                                   /*output_size*/output_size,
                                   /*activate_final*/activate_final));
   register_module("layers", layers_);
 };
 
 torch::Tensor MLPImpl::forward(torch::Tensor x) {
-  std::cout << "start MLP forward" << std::endl;
-  for (int i;i<hidden_layers_sizes_.size() + 1;i++) {
+  for (int i=0;i<hidden_layers_sizes_.size() + 1;i++) {
     x = layers_[i]->as<SonnetLinear>()->forward(x);
   }
-  std::cout << "end MLP forward" << std::endl;
   return x;
 };
 

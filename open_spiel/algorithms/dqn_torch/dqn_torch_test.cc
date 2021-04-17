@@ -34,7 +34,8 @@ namespace {
 void TestSimpleGame() {
   std::shared_ptr<const Game> game = efg_game::LoadEFGGame(efg_game::GetSimpleForkEFGData());
   SPIEL_CHECK_TRUE(game != nullptr);
-  DQN dqn(/*player_id*/0,
+  DQN dqn(/*use_observation*/game->GetType().provides_observation_tensor,
+          /*player_id*/0,
           /*state_representation_size*/game->InformationStateTensorSize(),
           /*num_actions*/game->NumDistinctActions(),
           /*hidden_layers_sizes*/{16},
@@ -59,6 +60,7 @@ void TestSimpleGame() {
       state->ApplyAction(action);
       total_reward += state->Rewards()[0];
     };
+    dqn.Step(state);
   };
 
   SPIEL_CHECK_GE(total_reward, 75);

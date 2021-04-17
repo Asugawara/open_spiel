@@ -46,7 +46,8 @@ struct Transition {
 
 class DQN {
   public: 
-    DQN(Player player_id,
+    DQN(bool use_observation,
+        Player player_id,
         int state_representation_size,
         int num_actions,
         std::vector<int> hidden_layers_sizes={128},
@@ -65,13 +66,14 @@ class DQN {
     virtual ~DQN() = default;
     Action Step(const std::unique_ptr<State>& state, bool is_evaluation=false, bool add_transition_record=true);
   private:
+    bool use_observation_;
     int player_id_;
     int num_actions_;
     std::vector<int> hidden_layers_sizes_;
     int update_target_network_every_;
     int learn_every_;
     int min_buffer_size_to_learn_;
-    int discount_factor_;
+    double discount_factor_;
     double epsilon_start_;
     double epsilon_end_;
     double epsilon_decay_duration_;
@@ -93,6 +95,7 @@ class DQN {
     std::mt19937 rng_;
     ActionsAndProbs actions_probs_;
     Action action_;
+    std::vector<float> GetInfoState(const std::unique_ptr<State>& state, Player player_id, bool use_observation);
     void AddTransition(const std::unique_ptr<State>& prev_state, Action prev_action, const std::unique_ptr<State>& state);
     Action EpsilonGreedy(std::vector<float> info_state, std::vector<Action> legal_actions, double epsilon);
     double GetEpsilon(bool is_evaluation, int power=1.0);
