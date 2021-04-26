@@ -23,64 +23,70 @@ namespace algorithms {
 namespace torch_dqn {
 
 SonnetLinearImpl::SonnetLinearImpl(const int& input_size, const int& output_size, bool activate_relu=false)
-   : sonnet_linear_(torch::nn::LinearOptions(
-     /*in_features*/input_size,
-     /*out_features*/output_size)),
+   : sonnet_linear_(torch::nn::LinearOptions(/*in_features*/input_size,
+                                             /*out_features*/output_size)),
      activate_relu_(activate_relu) {
-  double stddev = 1.0 / std::sqrt(input_size);
-  double mean = 0;
-  double lower = (-2 * stddev - mean) / stddev;
-  double upper = (2 * stddev - mean) / stddev;
-  std::cout << sonnet_linear_ << std::endl;
-  for (auto& named_parameter : sonnet_linear_->named_parameters()) {
-    if (named_parameter.key().find("weight") != std::string::npos) {
-      named_parameter.value().data() = torch::nn::functional::normalize(named_parameter.value().data());
-    };
-    if (named_parameter.key().find("bias") != std::string::npos) {
-      named_parameter.value().data() = torch::zeros({output_size});
-    };
-    // std::cout << named_parameter.value() << std::endl;
-  };
-  register_module("sonnet_linear", sonnet_linear_);
+  // double stddev = 1.0 / std::sqrt(input_size);
+  // double mean = 0;
+  // double lower = (-2 * stddev - mean) / stddev;
+  // double upper = (2 * stddev - mean) / stddev;
+  // std::cout << sonnet_linear_ << std::endl;
+  // for (auto& named_parameter : sonnet_linear_->named_parameters()) {
+  //   if (named_parameter.key().find("weight") != std::string::npos) {
+  //     named_parameter.value().data() = torch::nn::functional::normalize(named_parameter.value()).to(torch::kFloat64);
+  //   };
+  //   // if (named_parameter.key().find("bias") != std::string::npos) {
+  //   //   named_parameter.value().data() = torch::zeros({output_size});
+  //   // };
+  // };
+  // for (auto& named_parameter : sonnet_linear_->named_parameters()) {
+  //   if (named_parameter.key().find("weight") != std::string::npos) {
+  //     std::cout << named_parameter.value() << std::endl;
+  //   };
+  // };
+  register_module("sonnet_linear_", sonnet_linear_);
 };
 
 torch::Tensor SonnetLinearImpl::forward(torch::Tensor x) {
-  // std::cout << x << std::endl;
+  // std::cout << "requires grad" << x.requires_grad() << std::endl;
+  // for (auto& named_parameter : sonnet_linear_->named_parameters()) {
+  //   if (named_parameter.key().find("weight") != std::string::npos) {
+  //     std::cout << named_parameter.value() << std::endl;
+  //   };
+  // };
+
   if (activate_relu_) {
-    return torch::relu(sonnet_linear_(x));
+    return torch::relu(sonnet_linear_->forward(x));
   } else {
-    return sonnet_linear_(x);
+    return sonnet_linear_->forward(x);;
   };
 };
 
 MLPImpl::MLPImpl(const int& input_size,
                  std::vector<int> hidden_layers_sizes,
-                 int output_size,
-                 bool activate_final,
-                 std::string loss_str) 
+                 const int& output_size,
+                 bool activate_final) 
     : input_size_(input_size),
       hidden_layers_sizes_(hidden_layers_sizes),
-      output_size_(output_size_),
-      activate_final_(activate_final),
-      loss_str_(loss_str) {
+      output_size_(output_size),
+      activate_final_(activate_final){
   int layer_size = input_size_;
   for (auto h_size: hidden_layers_sizes_) {
-    std::cout << layer_size << std::endl;
     layers_->push_back(SonnetLinear(/*input_size*/layer_size,
                                     /*output_size*/h_size));
     layer_size = h_size;
-    std::cout << layer_size << std::endl;
   };
   layers_->push_back(SonnetLinear(/*input_size*/layer_size,
                                   /*output_size*/output_size,
                                   /*activate_final*/activate_final));
-  register_module("layers", layers_);
+  register_module("layers_", layers_);
+  // std::cout << c10::str(layers_) << std::endl;
 };
 
 torch::Tensor MLPImpl::forward(torch::Tensor x) {
   for (int i=0;i<hidden_layers_sizes_.size() + 1;i++) {
-    x = layers_[i]->as<SonnetLinear>()->forward(x);
-  }
+    x = layers_[i]->as<SonnetLinear>()->forward(x); 
+  };
   return x;
 };
 

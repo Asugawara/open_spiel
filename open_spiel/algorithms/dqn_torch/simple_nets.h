@@ -18,11 +18,9 @@
 #include <torch/torch.h>
 
 #include <iostream>
-#include <string>
-#include <vector>
-
 
 #include "open_spiel/spiel.h"
+#include "open_spiel/spiel_utils.h"
 
 namespace open_spiel {
 namespace algorithms {
@@ -43,22 +41,18 @@ TORCH_MODULE(SonnetLinear);
 class MLPImpl : public torch::nn::Module {
   public:
     MLPImpl(const int& input_size,
-            std::vector<int> hidden_size,
-            int output_size,
-            bool activate_final=false,
-            std::string loss_str="mse");
-    torch::Tensor forward(torch::Tensor x);
+            std::vector<int> hidden_layers_sizes,
+            const int& output_size,
+            bool activate_final=false);
+    torch::Tensor forward(torch::Tensor x);    
 
   private:
     int input_size_;
     std::vector<int> hidden_layers_sizes_;
     int output_size_;
     bool activate_final_;
-    std::string loss_str_;
-    double learning_rate_;
-    torch::Tensor forward_(torch::Tensor x);
     torch::nn::ModuleList layers_;
-
+    
 };
 TORCH_MODULE(MLP);
 

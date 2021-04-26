@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "open_spiel/algorithms/dqn_torch/dqn_torch.h"
+#include "open_spiel/algorithms/dqn_torch/dqn.h"
 
 #include <torch/torch.h>
 
@@ -41,24 +41,24 @@ void TestSimpleGame() {
           /*hidden_layers_sizes*/{16},
           /*replay_buffer_capacity*/100,
           /*batch_size*/5,
-          /*learning_rate*/0.01,
+          /*learning_rate*/0.001,
           /*update_target_network_every*/20,
-          /*learn_every*/10,
-          /*discount_factor*/1.0,
+          /*learn_every*/5,
+          /*discount_factor*/0.95,
           /*min_buffer_size_to_learn*/5,
           /*epsilon_start*/0.02,
           /*epsilon_end*/0.01);
-  std::unique_ptr<State> state = game->NewInitialState();
   int total_reward = 0;
-  for (int i=0;i<100;i++) {
+  std::unique_ptr<State> state;
+  for (int i=0;i<20;i++) {
     std::cout << "Episode: " << i << std::endl;
     std::cout << "total_reward: " << total_reward << std::endl;
-    std::unique_ptr<open_spiel::State> state = game->NewInitialState();
+    state = game->NewInitialState();
     while (!state->IsTerminal()) {
       open_spiel::Action action = dqn.Step(state);
       std::cout << "action: " << action << std::endl;
       state->ApplyAction(action);
-      total_reward += state->Rewards()[0];
+      total_reward += state->PlayerReward(0);
     };
     dqn.Step(state);
   };
