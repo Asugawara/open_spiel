@@ -86,15 +86,11 @@ class DQN {
     Action prev_action_;
     int setp_counter_;
     int input_size_;
-    // bool activate_final;
-    std::string loss_str_;
-    double learning_rate_;
+    std::string loss_str_; 
     MLP q_network_;
     MLP target_q_network_;
-    torch::optim::Adam optimizer_;
+    torch::optim::SGD optimizer_;
     std::mt19937 rng_;
-    ActionsAndProbs actions_probs_;
-    Action action_;
     std::vector<float> GetInfoState(const std::unique_ptr<State>& state, Player player_id, bool use_observation);
     void AddTransition(const std::unique_ptr<State>& prev_state, Action prev_action, const std::unique_ptr<State>& state);
     Action EpsilonGreedy(std::vector<float> info_state, std::vector<Action> legal_actions, double epsilon);

@@ -42,8 +42,8 @@ void TestLossReduction() {
           /*hidden_size=*/layer,
           /*output_size=*/2,
           /*activate_final*/true);
-  torch::Tensor x = torch::rand({4,4});
-  torch::Tensor y = torch::rand({4});
+  torch::Tensor x = torch::ones({4,4});
+  torch::Tensor y = torch::ones({4});
   std::cout << x << y << std::endl;
   torch::optim::Adam optimizer(mlp->parameters(), torch::optim::AdamOptions(0.01));
   torch::nn::MSELoss mse_loss;

@@ -66,7 +66,7 @@ DQN::DQN(bool use_observation,
       replay_buffer_(replay_buffer_capacity),
       q_network_(input_size_, hidden_layers_sizes_, num_actions_),
       target_q_network_(input_size_, hidden_layers_sizes_, num_actions_),
-      optimizer_(q_network_->parameters(), torch::optim::AdamOptions(learning_rate_)),
+      optimizer_(q_network_->parameters(), torch::optim::SGDOptions(learning_rate)),
       loss_str_(loss_str),
       exists_prev_(false),
       prev_state_(nullptr),
@@ -142,26 +142,24 @@ void DQN::AddTransition(const std::unique_ptr<State>& prev_state, Action prev_ac
 };
 
 Action DQN::EpsilonGreedy(std::vector<float> info_state, std::vector<Action> legal_actions, double epsilon) {
-  std::cout<<"start epsilon greedy" << std::endl;
   Action action;
-  ActionsAndProbs actions_probs;
   if (absl::Uniform(rng_, 0.0, 1.0) < epsilon) {
+    ActionsAndProbs actions_probs;
     std::vector<double> probs(legal_actions.size(), 1.0/legal_actions.size());
     for (int i=0;i<legal_actions.size();i++){
       actions_probs.push_back({legal_actions[i], probs[i]});
     };
     action = SampleAction(actions_probs, rng_).first;
-    std::cout<<"sample action" << SampleAction(actions_probs, rng_).first << std::endl;
   } else {
     torch::Tensor info_state_tensor = torch::from_blob(info_state.data(), {info_state.size()}, torch::TensorOptions().dtype(torch::kFloat32)).view({1, -1});
     torch::Tensor q_value = q_network_->forward(info_state_tensor);
+    std::cout << q_value << std::endl;
     torch::Tensor legal_actions_mask = torch::empty({legal_actions.size()});
     for (Action a: legal_actions){
       legal_actions_mask[a] = 1;
     };
     action = torch::mul(q_value.detach(), legal_actions_mask).argmax(1).item().toInt();
   };
-  std::cout<<"end epsilon greedy" << std::endl;
   return action;
 } ;
 
@@ -180,7 +178,6 @@ double DQN::GetEpsilon(bool is_evaluation, int power) {
 
 void DQN::Learn() {
   if (replay_buffer_.Size() < batch_size_ || replay_buffer_.Size() < min_buffer_size_to_learn_) return;
-  std::cout << "start learn" << std::endl;
   std::vector<Transition> transition = replay_buffer_.Sample(&rng_, batch_size_);
   std::vector<torch::Tensor> info_states;
   std::vector<torch::Tensor> next_info_states;
@@ -194,55 +191,42 @@ void DQN::Learn() {
     next_info_states.push_back(
         torch::from_blob(t.next_info_state.data(), {1, t.next_info_state.size()}, torch::TensorOptions().dtype(torch::kFloat32)).clone());
     legal_actions_mask.push_back(
-        torch::from_blob(t.legal_actions_mask.data(), {1, t.legal_actions_mask.size()}, torch::TensorOptions().dtype(torch::kInt32)).to(torch::kInt64).clone());
+        torch::from_blob(t.legal_actions_mask.data(), {1, t.legal_actions_mask.size()}, torch::TensorOptions().dtype(torch::kFloat32)).to(torch::kInt64).clone());
     actions.push_back(t.action);
     rewards.push_back(t.reward);
     are_final_steps.push_back(t.is_final_step);    
   }
-  std::cout << "to vector done" << std::endl;
-  torch::Tensor info_states_tensor = torch::cat(torch::TensorList(info_states), 0);
-  torch::Tensor next_info_states_tensor = torch::cat(torch::TensorList(next_info_states), 0);
+  torch::Tensor info_states_tensor = torch::stack(info_states, 0);
+  torch::Tensor next_info_states_tensor = torch::stack(next_info_states, 0);
   torch::Tensor q_values = q_network_->forward(info_states_tensor);
-  //todo where lost requires grad
-  std::cout << "info state after forwward" << info_states_tensor << q_values << q_values.requires_grad() << std::endl;
   torch::Tensor target_q_values = target_q_network_->forward(next_info_states_tensor).detach();
 
-  // std::cout << q_values << target_q_values << std::endl;
-  std::cout << info_states_tensor << std::endl;
-  // std::cout << torch::TensorList(legal_actions_mask) << std::endl;
-  
-  torch::Tensor legal_action_masks_tensor = torch::cat(torch::TensorList(legal_actions_mask));
-  torch::Tensor illegal_actions = 1 - legal_action_masks_tensor;
+  torch::Tensor legal_action_masks_tensor = torch::stack(legal_actions_mask, 0);
+  torch::Tensor illegal_actions = 1.0 - legal_action_masks_tensor;
   torch::Tensor illegal_logits = illegal_actions * kIllegalActionLogitsPenalty;
 
-  std::cout << "before add" << std::endl;
   torch::Tensor max_next_q = std::get<0>(
-      torch::max(target_q_values + illegal_logits, 1));
-  torch::Tensor are_final_steps_tensor = torch::from_blob(are_final_steps.data(), {batch_size_}, torch::TensorOptions().dtype(torch::kInt32));
+      torch::max(target_q_values + illegal_logits, 2));
+  torch::Tensor are_final_steps_tensor = torch::from_blob(are_final_steps.data(), {batch_size_}, torch::TensorOptions().dtype(torch::kInt32)).to(torch::kFloat32);
   torch::Tensor rewards_tensor = torch::from_blob(rewards.data(), {batch_size_}, torch::TensorOptions().dtype(torch::kFloat32));
-  torch::Tensor target = rewards_tensor + (1 - are_final_steps_tensor) * max_next_q * discount_factor_;
+  torch::Tensor target = rewards_tensor + (1.0 - are_final_steps_tensor) * max_next_q.squeeze(1) * discount_factor_;
   torch::Tensor actions_tensor = torch::from_blob(actions.data(), {batch_size_}, torch::TensorOptions().dtype(torch::kInt64));
-  torch::Tensor predictions = q_values.index({torch::arange(q_values.size(0)), actions_tensor});
-  // std::cout << are_final_steps_tensor << rewards_tensor << target << std::endl;
-  // std::cout << q_values << predictions << target << std::endl;
-  // std::cout << "rewards:" << rewards_tensor << std::endl;
-  
+  torch::Tensor predictions = q_values.index({torch::arange(q_values.size(0)), torch::indexing::Slice(), actions_tensor});
+
   optimizer_.zero_grad();
   torch::Tensor value_loss;
   if (loss_str_ == "mse") {
     torch::nn::MSELoss mse_loss;
-    value_loss = mse_loss(predictions, target);
-    std::cout << predictions << target << value_loss << value_loss.requires_grad() << std::endl;
+    value_loss = mse_loss(predictions.squeeze(1), target);
   } else if(loss_str_ == "huber") {
     torch::nn::SmoothL1Loss l1_loss;
-    value_loss = l1_loss(predictions, target);
+    value_loss = l1_loss(predictions.squeeze(1), target);
   } else {
     SpielFatalError("Not implemented, choose from 'mse', 'huber'.");
   };
   value_loss.backward();
   optimizer_.step();
   std::cout << "loss:" << value_loss << std::endl;
-
 };
 
 }  // namespace torch_dqn
