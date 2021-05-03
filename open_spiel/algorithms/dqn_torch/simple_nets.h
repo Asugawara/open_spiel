@@ -26,7 +26,8 @@ namespace open_spiel {
 namespace algorithms {
 namespace torch_dqn {
 
-
+// A Sonnet linear module.
+// Always includes biases and only supports ReLU activations.
 class SonnetLinearImpl : public torch::nn::Module {
   public :
     SonnetLinearImpl(const int& input_size, const int& output_size, bool activate_relu);
@@ -38,6 +39,7 @@ class SonnetLinearImpl : public torch::nn::Module {
 };
 TORCH_MODULE(SonnetLinear);
 
+// A simple dense network built from linear layers above.
 class MLPImpl : public torch::nn::Module {
   public:
     MLPImpl(const int& input_size,

@@ -41,7 +41,7 @@ void TestSimpleGame() {
           /*hidden_layers_sizes*/{16},
           /*replay_buffer_capacity*/100,
           /*batch_size*/5,
-          /*learning_rate*/0.1,
+          /*learning_rate*/0.01,
           /*update_target_network_every*/20,
           /*learn_every*/5,
           /*discount_factor*/1.0,
@@ -51,8 +51,6 @@ void TestSimpleGame() {
   int total_reward = 0;
   std::unique_ptr<State> state;
   for (int i=0;i<100;i++) {
-    std::cout << "Episode: " << i << std::endl;
-    std::cout << "total_reward: " << total_reward << std::endl;
     state = game->NewInitialState();
     while (!state->IsTerminal()) {
       open_spiel::Action action = dqn.Step(state);

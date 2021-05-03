@@ -17,10 +17,13 @@
 #include <torch/torch.h>
 
 #include <iostream>
+#include <cmath>
 
 namespace open_spiel {
 namespace algorithms {
 namespace torch_dqn {
+
+static constexpr double kSqrt2 = 1.4142135623730950488;
 
 SonnetLinearImpl::SonnetLinearImpl(const int& input_size, const int& output_size, bool activate_relu=false)
    : sonnet_linear_(torch::nn::LinearOptions(/*in_features*/input_size,
@@ -31,23 +34,23 @@ SonnetLinearImpl::SonnetLinearImpl(const int& input_size, const int& output_size
   double upper = 2.0 * stddev;
 
   std::cout << "lower" << lower << "upper" << upper << std::endl;
-  // for (auto& named_parameter : sonnet_linear_->named_parameters()) {
-  //   if (named_parameter.key().find("weight") != std::string::npos) {
-  //     std::cout << named_parameter.value() << std::endl;
-  //     named_parameter.value().data() = torch::nn::init::normal_(named_parameter.value());
-  //   };
-  //   if (named_parameter.key().find("bias") != std::string::npos) {
-  //     named_parameter.value().data() = torch::zeros({output_size});
-  //   };
-  // };
+  for (auto& named_parameter : sonnet_linear_->named_parameters()) {
+    if (named_parameter.key().find("weight") != std::string::npos) {
+      torch::Tensor uniform_param = torch::nn::init::uniform_(named_parameter.value()).to(torch::kFloat64);
+      double clip_lower = 0.5 * (1.0 + std::erf(lower / kSqrt2));
+      double clip_upper = 0.5 * (1.0 + std::erf(upper / kSqrt2));
+      torch::Tensor new_param = kSqrt2 * torch::erfinv(2.0 * ((clip_upper - clip_lower) * uniform_param + clip_lower) - 1.0);
+      named_parameter.value().data() = new_param;
+    };
+    if (named_parameter.key().find("bias") != std::string::npos) {
+      named_parameter.value().data() = torch::zeros({output_size});
+    };
+  };
   
   register_module("sonnet_linear_", sonnet_linear_);
 };
 
 torch::Tensor SonnetLinearImpl::forward(torch::Tensor x) {
-  // for (auto& named_parameter : sonnet_linear_->named_parameters()) {
-  //   std::cout << named_parameter.value() << std::endl;
-  // };
   if (activate_relu_) {
     return torch::relu(sonnet_linear_->forward(x));
   } else {
@@ -73,7 +76,6 @@ MLPImpl::MLPImpl(const int& input_size,
                                   /*output_size*/output_size,
                                   /*activate_final*/activate_final));
   register_module("layers_", layers_);
-  // std::cout << c10::str(layers_) << std::endl;
 };
 
 torch::Tensor MLPImpl::forward(torch::Tensor x) {

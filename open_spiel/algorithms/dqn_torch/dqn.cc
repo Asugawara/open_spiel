@@ -153,7 +153,6 @@ Action DQN::EpsilonGreedy(std::vector<float> info_state, std::vector<Action> leg
   } else {
     torch::Tensor info_state_tensor = torch::from_blob(info_state.data(), {info_state.size()}, torch::TensorOptions().dtype(torch::kFloat32)).view({1, -1});
     torch::Tensor q_value = q_network_->forward(info_state_tensor);
-    std::cout << q_value << std::endl;
     torch::Tensor legal_actions_mask = torch::empty({legal_actions.size()});
     for (Action a: legal_actions){
       legal_actions_mask[a] = 1;

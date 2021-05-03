@@ -43,7 +43,7 @@ struct Transition {
   std::vector<int> legal_actions_mask;
 };
 
-
+// DQN Agent implementation in LibTorch.
 class DQN {
   public: 
     DQN(bool use_observation,
