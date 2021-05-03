@@ -33,7 +33,6 @@ SonnetLinearImpl::SonnetLinearImpl(const int& input_size, const int& output_size
   double lower = -2.0 * stddev;
   double upper = 2.0 * stddev;
 
-  std::cout << "lower" << lower << "upper" << upper << std::endl;
   for (auto& named_parameter : sonnet_linear_->named_parameters()) {
     if (named_parameter.key().find("weight") != std::string::npos) {
       torch::Tensor uniform_param = torch::nn::init::uniform_(named_parameter.value()).to(torch::kFloat64);
@@ -59,7 +58,7 @@ torch::Tensor SonnetLinearImpl::forward(torch::Tensor x) {
 };
 
 MLPImpl::MLPImpl(const int& input_size,
-                 std::vector<int> hidden_layers_sizes,
+                 const std::vector<int>& hidden_layers_sizes,
                  const int& output_size,
                  bool activate_final) 
     : input_size_(input_size),

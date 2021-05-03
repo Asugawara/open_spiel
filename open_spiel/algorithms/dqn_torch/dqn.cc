@@ -225,7 +225,6 @@ void DQN::Learn() {
   };
   value_loss.backward();
   optimizer_.step();
-  std::cout << "loss:" << value_loss << std::endl;
 };
 
 }  // namespace torch_dqn

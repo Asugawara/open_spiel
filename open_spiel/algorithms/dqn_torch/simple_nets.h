@@ -43,7 +43,7 @@ TORCH_MODULE(SonnetLinear);
 class MLPImpl : public torch::nn::Module {
   public:
     MLPImpl(const int& input_size,
-            std::vector<int> hidden_layers_sizes,
+            const std::vector<int>& hidden_layers_sizes,
             const int& output_size,
             bool activate_final=false);
     torch::Tensor forward(torch::Tensor x);    
